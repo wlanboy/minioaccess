@@ -40,12 +40,20 @@ button {
     border-radius: 5px;
 }
 
+body:not(.dark-mode) button {
+    background-color: #1976d2;
+}
+
 .container {
     max-width: 800px;
     margin: 2em auto;
     padding: 1em;
     background-color: #242424;
     border-radius: 8px;
+}
+
+body:not(.dark-mode) .container {
+    background-color: #fff;
 }
 
 section {
@@ -58,13 +66,21 @@ form {
     margin-bottom: 1em;
 }
 
-input[type="text"], input[type="password"] {
+input[type="text"], input[type="password"], select {
     padding: 8px;
     border: 1px solid #444;
     background-color: #333;
     color: white;
     border-radius: 4px;
     flex-grow: 1;
+}
+
+body:not(.dark-mode) input[type="text"],
+body:not(.dark-mode) input[type="password"],
+body:not(.dark-mode) select {
+    background-color: #fff;
+    color: #333;
+    border-color: #ccc;
 }
 
 ul {
@@ -77,6 +93,11 @@ li {
     padding: 10px;
     margin-bottom: 5px;
     border-radius: 4px;
+}
+
+body:not(.dark-mode) li {
+    background-color: #e0e0e0;
+    color: #333;
 }
 
 a {
@@ -102,6 +123,10 @@ hr {
     height: 1px;
     background: #444;
     margin: 2em 0;
+}
+
+body:not(.dark-mode) hr {
+    background: #ccc;
 }
 
 .message {
