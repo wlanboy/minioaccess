@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <div class="container">
+        <a href="/">&larr; Zurück zur Übersicht</a>
+
+        <h2>Bucket: {{ bucket_name }}</h2>
+
+        {% if message %}
+            <div class="message {% if 'Fehler' in message or 'Error' in message %}error{% else %}success{% endif %}">
+                {{ message }}
+            </div>
+        {% endif %}
+
+        <section>
+            <h3>Aktuelle Berechtigungen</h3>
+            {% if policies %}
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Benutzer</th>
+                            <th>Policy</th>
+                            <th>Aktion</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for p in policies %}
+                        <tr>
+                            <td>{{ p.user }}</td>
+                            <td>{{ p.policy }}</td>
+                            <td>
+                                <form method="POST" style="display: inline;">
+                                    <input type="hidden" name="action" value="detach_policy">
+                                    <input type="hidden" name="user" value="{{ p.user }}">
+                                    <input type="hidden" name="policy" value="{{ p.policy }}">
+                                    <button type="submit" class="delete-btn">Entfernen</button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% else %}
+                <p>Keine Berechtigungen gefunden.</p>
+            {% endif %}
+        </section>
+
+        <hr>
+
+        <section>
+            <h3>Neue Berechtigung hinzufügen</h3>
+            <form method="POST">
+                <input type="hidden" name="action" value="attach_policy">
+
+                <label for="user">Benutzer:</label>
+                <select name="user" id="user">
+                    {% for u in users %}
+                        <option value="{{ u }}">{{ u }}</option>
+                    {% endfor %}
+                </select>
+
+                <label for="policy_name">Policy:</label>
+                <select name="policy_name" id="policy_name">
+                    <option value="readonly">readonly</option>
+                    <option value="readwrite">readwrite</option>
+                    <option value="writeonly">writeonly</option>
+                    <option value="{{ bucket_name }}">{{ bucket_name }} (bucket-spezifisch)</option>
+                </select>
+
+                <button type="submit">Berechtigung hinzufügen</button>
+            </form>
+        </section>
+    </div>
+{% endblock %}
