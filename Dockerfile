@@ -31,7 +31,6 @@ COPY --from=builder /install /usr/local
 COPY --from=builder /app/mc /app/mc
 
 # Anwendungscode kopieren
-COPY .env /app/
 COPY main.py /app/
 COPY mc_commands.py /app/
 COPY templates/ /app/templates/
