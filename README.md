@@ -1,4 +1,4 @@
-# simple minio web manager for user and buckets of minio community edition
+# simple minio web manager for minio community edition
 * uses mc client for access to the admin api
 * provides management of
   * users
