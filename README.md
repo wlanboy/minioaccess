@@ -1,5 +1,13 @@
 # simple minio web manager for user and buckets of minio community edition
 * uses mc client for access to the admin api
+* provides management of
+  * users
+  * buckets
+  * ACLs
+
+## Screenhots
+![User and Buckets](screenshots/user-and-buckets.png)
+![ACLs](screenshots/acls.png)
 
 ## get uv - makes python life easier
 ```
@@ -13,12 +21,9 @@ uv run uvicorn main:app --host 0.0.0.0 --port 9002
 ```
 
 ### from scratch
-- uv init chat
-- cd chat
 - uv sync
 - uv pip compile pyproject.toml -o requirements.txt
-- uv pip install -r requirements.txt
-- uv run uvicorn main:app
+- uv run uvicorn main:app --reload
 
 ### get local mc client
 ```
