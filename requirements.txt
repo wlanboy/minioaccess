@@ -16,6 +16,8 @@ h11==0.16.0
     # via uvicorn
 idna==3.11
     # via anyio
+itsdangerous==2.2.0
+    # via minioaccess (pyproject.toml)
 jinja2==3.1.6
     # via minioaccess (pyproject.toml)
 markupsafe==3.0.2
