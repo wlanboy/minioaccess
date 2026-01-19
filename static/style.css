@@ -79,6 +79,24 @@ li {
     border-radius: 4px;
 }
 
+a {
+    color: #90caf9;
+    text-decoration: none;
+}
+
+a:hover {
+    color: #bbdefb;
+    text-decoration: underline;
+}
+
+body:not(.dark-mode) a {
+    color: #1976d2;
+}
+
+body:not(.dark-mode) a:hover {
+    color: #1565c0;
+}
+
 hr {
     border: 0;
     height: 1px;
