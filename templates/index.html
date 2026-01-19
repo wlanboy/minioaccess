@@ -53,34 +53,5 @@
             </ul>
         </section>
 
-        <hr>
-        
-        <section>
-            <h2>Benutzerrechte verwalten 🔑</h2>
-            <form method="POST">
-                <input type="hidden" name="action" value="set_policy">
-                
-                <select name="policy_user">
-                    {% for user in users %}
-                        <option value="{{ user }}">{{ user }}</option>
-                    {% endfor %}
-                </select>
-                
-                <select name="policy_bucket">
-                    {% for bucket in buckets %}
-                        <option value="{{ bucket }}">{{ bucket }}</option>
-                    {% endfor %}
-                </select>
-                
-                <select name="policy_name">
-                    <option value="readonly">readonly</option>
-                    <option value="readwrite">readwrite</option>
-                    <option value="none">keine Rechte</option>
-                </select>
-                <button type="submit">Rechte setzen</button>
-            </form>
-            <p>Für eine Policy auf einen Bucket, muss der Bucket-Name dem Policy-Namen entsprechen.</p>
-        </section>
-
     </div>
 {% endblock %}
