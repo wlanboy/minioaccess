@@ -21,6 +21,7 @@ uv run uvicorn main:app --host 0.0.0.0 --port 9002
 ```
 
 ### from scratch
+- uv lock --upgrade
 - uv sync
 - uv pip compile pyproject.toml -o requirements.txt
 - uv run uvicorn main:app --reload
