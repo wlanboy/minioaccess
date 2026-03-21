@@ -6,7 +6,8 @@
   * ACLs
 
 ## Screenhots
-![User and Buckets](screenshots/user-and-buckets.png)
+![Users](screenshots/users.png)
+![Buckets](screenshots/buckets.png)
 ![ACLs](screenshots/acls.png)
 
 ## get uv - makes python life easier
