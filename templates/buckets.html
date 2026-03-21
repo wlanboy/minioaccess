@@ -19,25 +19,35 @@
             </form>
         </section>
 
-        <section>
-            <h3>Bucket löschen</h3>
-            <form method="POST">
-                <input type="hidden" name="action" value="delete_bucket">
-                <input type="text" name="bucket_name" placeholder="Bucket-Name">
-                <button type="submit" class="delete-btn">Löschen</button>
-            </form>
-        </section>
 
         <hr>
 
         <section>
             <h3>Vorhandene Buckets</h3>
             {% if buckets %}
-                <ul>
-                    {% for bucket in buckets %}
-                        <li><a href="/bucket/{{ bucket }}">{{ bucket }}</a></li>
-                    {% endfor %}
-                </ul>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Aktion</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for bucket in buckets %}
+                        <tr>
+                            <td>{{ bucket }}</td>
+                            <td>
+                                <a href="/bucket/{{ bucket }}">Berechtigungen</a>
+                                <form method="POST" style="display: inline; margin-left: 0.5em;">
+                                    <input type="hidden" name="action" value="delete_bucket">
+                                    <input type="hidden" name="bucket_name" value="{{ bucket }}">
+                                    <button type="submit" class="delete-btn">Löschen</button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
             {% else %}
                 <p>Keine Buckets vorhanden.</p>
             {% endif %}
