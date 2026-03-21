@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <div class="container">
+        <a href="/">&larr; Zurück zur Übersicht</a>
+
+        <h2>Policy-Übersicht 📋</h2>
+
+        {% if message %}
+            <div class="message {% if 'Fehler' in message or 'Error' in message %}error{% else %}success{% endif %}">
+                {{ message }}
+            </div>
+        {% endif %}
+
+        {% if policies %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Actions</th>
+                        <th>Resources</th>
+                        <th>Aktion</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for p in policies %}
+                    <tr>
+                        <td>{{ p.name }}</td>
+                        <td>{{ p.actions | join(', ') if p.actions else '–' }}</td>
+                        <td>{{ p.resources | join(', ') if p.resources else '–' }}</td>
+                        <td>
+                            <form method="POST" style="display: inline;">
+                                <input type="hidden" name="action" value="delete_policy">
+                                <input type="hidden" name="policy_name" value="{{ p.name }}">
+                                <button type="submit" class="delete-btn">Löschen</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <p>Keine Policies gefunden.</p>
+        {% endif %}
+    </div>
+{% endblock %}
