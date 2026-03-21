@@ -25,7 +25,7 @@
                 <input type="hidden" name="action" value="change_password">
                 <select name="access_key">
                     {% for user in users %}
-                        <option value="{{ user }}">{{ user }}</option>
+                        <option value="{{ user.name }}">{{ user.name }}</option>
                     {% endfor %}
                 </select>
                 <input type="password" name="secret_key" placeholder="Neues Passwort">
@@ -33,11 +33,38 @@
             </form>
 
             <h3>Vorhandene Benutzer:</h3>
-            <ul>
-                {% for user in users %}
-                    <li>{{ user }}</li>
-                {% endfor %}
-            </ul>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Status</th>
+                        <th>Aktion</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for user in users %}
+                    <tr>
+                        <td>{{ user.name }}</td>
+                        <td>{{ "aktiv" if user.enabled else "deaktiviert" }}</td>
+                        <td>
+                            {% if user.enabled %}
+                            <form method="POST" style="display: inline;">
+                                <input type="hidden" name="action" value="disable_user">
+                                <input type="hidden" name="access_key" value="{{ user.name }}">
+                                <button type="submit" class="delete-btn">Deaktivieren</button>
+                            </form>
+                            {% else %}
+                            <form method="POST" style="display: inline;">
+                                <input type="hidden" name="action" value="enable_user">
+                                <input type="hidden" name="access_key" value="{{ user.name }}">
+                                <button type="submit">Aktivieren</button>
+                            </form>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
         </section>
 
         <hr>
