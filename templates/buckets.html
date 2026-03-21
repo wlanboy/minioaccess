@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <div class="container">
+        <h2>Bucket-Verwaltung</h2>
+
+        {% if message %}
+            <div class="message {% if 'Fehler' in message or 'Error' in message %}error{% else %}success{% endif %}">
+                {{ message }}
+            </div>
+        {% endif %}
+
+        <section>
+            <h3>Bucket erstellen</h3>
+            <form method="POST">
+                <input type="hidden" name="action" value="create_bucket">
+                <input type="text" name="bucket_name" placeholder="Bucket-Name">
+                <button type="submit">Erstellen</button>
+            </form>
+        </section>
+
+        <section>
+            <h3>Bucket löschen</h3>
+            <form method="POST">
+                <input type="hidden" name="action" value="delete_bucket">
+                <input type="text" name="bucket_name" placeholder="Bucket-Name">
+                <button type="submit" class="delete-btn">Löschen</button>
+            </form>
+        </section>
+
+        <hr>
+
+        <section>
+            <h3>Vorhandene Buckets</h3>
+            {% if buckets %}
+                <ul>
+                    {% for bucket in buckets %}
+                        <li><a href="/bucket/{{ bucket }}">{{ bucket }}</a></li>
+                    {% endfor %}
+                </ul>
+            {% else %}
+                <p>Keine Buckets vorhanden.</p>
+            {% endif %}
+        </section>
+    </div>
+{% endblock %}

@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <div class="container">
+        <h2>Benutzerverwaltung</h2>
+
+        {% if message %}
+            <div class="message {% if 'Fehler' in message or 'Error' in message %}error{% else %}success{% endif %}">
+                {{ message }}
+            </div>
+        {% endif %}
+
+        <section>
+            <h3>Benutzer erstellen</h3>
+            <form method="POST">
+                <input type="hidden" name="action" value="create_user">
+                <input type="text" name="access_key" placeholder="Benutzername">
+                <input type="password" name="secret_key" placeholder="Passwort (min. 12 Zeichen)">
+                <button type="submit">Erstellen</button>
+            </form>
+        </section>
+
+        <section>
+            <h3>Passwort ändern</h3>
+            <form method="POST">
+                <input type="hidden" name="action" value="change_password">
+                <select name="access_key">
+                    {% for user in users %}
+                        <option value="{{ user.name }}">{{ user.name }}</option>
+                    {% endfor %}
+                </select>
+                <input type="password" name="secret_key" placeholder="Neues Passwort (min. 12 Zeichen)">
+                <button type="submit">Ändern</button>
+            </form>
+        </section>
+
+        <section>
+            <h3>Benutzer löschen</h3>
+            <form method="POST">
+                <input type="hidden" name="action" value="delete_user">
+                <input type="text" name="access_key" placeholder="Benutzername">
+                <button type="submit" class="delete-btn">Löschen</button>
+            </form>
+        </section>
+
+        <hr>
+
+        <section>
+            <h3>Vorhandene Benutzer</h3>
+            {% if users %}
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Status</th>
+                            <th>Aktion</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for user in users %}
+                        <tr>
+                            <td>{{ user.name }}</td>
+                            <td>
+                                <span class="badge {{ 'active' if user.enabled else 'inactive' }}">
+                                    {{ "aktiv" if user.enabled else "deaktiviert" }}
+                                </span>
+                            </td>
+                            <td>
+                                {% if user.enabled %}
+                                <form method="POST" style="display: inline;">
+                                    <input type="hidden" name="action" value="disable_user">
+                                    <input type="hidden" name="access_key" value="{{ user.name }}">
+                                    <button type="submit" class="delete-btn">Deaktivieren</button>
+                                </form>
+                                {% else %}
+                                <form method="POST" style="display: inline;">
+                                    <input type="hidden" name="action" value="enable_user">
+                                    <input type="hidden" name="access_key" value="{{ user.name }}">
+                                    <button type="submit">Aktivieren</button>
+                                </form>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            {% else %}
+                <p>Keine Benutzer vorhanden.</p>
+            {% endif %}
+        </section>
+    </div>
+{% endblock %}
