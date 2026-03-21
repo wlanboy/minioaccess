@@ -159,7 +159,81 @@ body:not(.dark-mode) hr {
 }
 
 .message.success {
-    background-color: #81c784; 
+    background-color: #81c784;
     color: #333;
     font-weight: bold;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 0.5em;
+}
+
+th, td {
+    padding: 10px 14px;
+    text-align: left;
+    border-bottom: 1px solid #444;
+}
+
+th {
+    background-color: #333;
+    color: #aaa;
+    font-size: 0.85em;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+tbody tr:hover {
+    background-color: #2e2e2e;
+}
+
+body:not(.dark-mode) th {
+    background-color: #e8e8e8;
+    color: #555;
+    border-bottom-color: #ccc;
+}
+
+body:not(.dark-mode) td {
+    border-bottom-color: #ddd;
+}
+
+body:not(.dark-mode) tbody tr:hover {
+    background-color: #f5f5f5;
+}
+
+.badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 0.8em;
+    font-weight: bold;
+}
+
+.badge.active {
+    background-color: #2e7d32;
+    color: #c8e6c9;
+}
+
+.badge.inactive {
+    background-color: #4a3000;
+    color: #ffe082;
+}
+
+body:not(.dark-mode) .badge.active {
+    background-color: #c8e6c9;
+    color: #1b5e20;
+}
+
+body:not(.dark-mode) .badge.inactive {
+    background-color: #fff3cd;
+    color: #856404;
+}
+
+.delete-btn {
+    background-color: #b71c1c;
+}
+
+.delete-btn:hover {
+    background-color: #d32f2f;
 }
