@@ -38,47 +38,71 @@ class TestGetPolicyActions:
 # list_users
 # ---------------------------------------------------------------------------
 
+def _user_json(access_key: str, enabled: bool) -> str:
+    status = "enabled" if enabled else "disabled"
+    return json.dumps({"status": "success", "accessKey": access_key, "userStatus": status})
+
+
 class TestListUsers:
     def test_parses_two_users(self):
-        output = "enabled  alice\nenabled  bob"
+        output = f"{_user_json('alice', True)}\n{_user_json('bob', True)}"
         with patch("mc_commands.run_mc_command", return_value=output):
-            assert list_users() == ["alice", "bob"]
+            assert list_users() == [{"name": "alice", "enabled": True}, {"name": "bob", "enabled": True}]
+
+    def test_parses_disabled_user(self):
+        output = f"{_user_json('alice', True)}\n{_user_json('bob', False)}"
+        with patch("mc_commands.run_mc_command", return_value=output):
+            assert list_users() == [{"name": "alice", "enabled": True}, {"name": "bob", "enabled": False}]
 
     def test_returns_empty_list_on_error(self):
         with patch("mc_commands.run_mc_command", return_value="Error: connection refused"):
             assert list_users() == []
 
-    def test_ignores_lines_without_two_parts(self):
-        output = "enabled  alice\n\nenabled  bob\n"
+    def test_ignores_empty_lines(self):
+        output = f"{_user_json('alice', True)}\n\n{_user_json('bob', True)}\n"
         with patch("mc_commands.run_mc_command", return_value=output):
-            assert list_users() == ["alice", "bob"]
+            assert list_users() == [{"name": "alice", "enabled": True}, {"name": "bob", "enabled": True}]
 
     def test_single_user(self):
-        with patch("mc_commands.run_mc_command", return_value="enabled  charlie"):
-            assert list_users() == ["charlie"]
+        with patch("mc_commands.run_mc_command", return_value=_user_json("charlie", True)):
+            assert list_users() == [{"name": "charlie", "enabled": True}]
 
 
 # ---------------------------------------------------------------------------
 # list_buckets
 # ---------------------------------------------------------------------------
 
+def _bucket_json(name: str) -> str:
+    return json.dumps({"status": "success", "type": "folder", "key": f"{name}/", "size": 0})
+
+
 class TestListBuckets:
     def test_parses_bucket_names(self):
-        output = "[2024-01-01 00:00:00 UTC]     0B mybucket/\n[2024-01-01 00:00:00 UTC]     0B other/"
+        output = f"{_bucket_json('mybucket')}\n{_bucket_json('other')}"
         with patch("mc_commands.run_mc_command", return_value=output):
             buckets = list_buckets()
-        assert "mybucket/" in buckets
-        assert "other/" in buckets
+        assert "mybucket" in buckets
+        assert "other" in buckets
 
-    def test_filters_error_lines(self):
-        output = "mc: ERROR something went wrong\n[2024-01-01] 0B good/"
-        with patch("mc_commands.run_mc_command", return_value=output):
+    def test_strips_trailing_slash(self):
+        with patch("mc_commands.run_mc_command", return_value=_bucket_json("mybucket")):
             buckets = list_buckets()
-        assert all("ERROR" not in b for b in buckets)
+        assert buckets == ["mybucket"]
+
+    def test_returns_empty_on_error(self):
+        with patch("mc_commands.run_mc_command", return_value="Error: connection refused"):
+            assert list_buckets() == []
 
     def test_empty_output_returns_empty_list(self):
         with patch("mc_commands.run_mc_command", return_value=""):
             assert list_buckets() == []
+
+    def test_ignores_non_folder_entries(self):
+        file_entry = json.dumps({"status": "success", "type": "file", "key": "somefile.txt", "size": 100})
+        output = f"{_bucket_json('mybucket')}\n{file_entry}"
+        with patch("mc_commands.run_mc_command", return_value=output):
+            buckets = list_buckets()
+        assert buckets == ["mybucket"]
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +111,7 @@ class TestListBuckets:
 
 class TestCreateBucketPolicy:
     def test_returns_policy_name_on_success(self):
-        with patch("mc_commands.run_mc_command", return_value="Policy created"):
+        with patch("mc_commands.run_mc_command", return_value=json.dumps({"status": "success", "policy": "mybucket-readonly"})):
             result = create_bucket_policy("mybucket", "readonly")
         assert result == "mybucket-readonly"
 
@@ -111,34 +135,17 @@ class TestCreateBucketPolicy:
 
         def fake_run(command):
             captured_path.append(command[-1])  # letztes Arg = temp-Datei
-            return "Policy created"
+            return json.dumps({"status": "success"})
 
         with patch("mc_commands.run_mc_command", side_effect=fake_run):
             create_bucket_policy("testbucket", "readonly")
 
         assert captured_path, "run_mc_command wurde nicht aufgerufen"
-        # Datei wird nach dem Aufruf gelöscht (finally: os.unlink) – wir
-        # prüfen daher das JSON über einen zweiten Patch-Ansatz.
 
     def test_policy_json_content(self):
         """Verifiziert das erzeugte Policy-JSON für readwrite."""
         written_json: list[dict] = []
 
-        original_open = open
-
-        def capturing_open(path, mode="r", **kwargs):
-            fh = original_open(path, mode, **kwargs)
-            if mode == "w" and path.endswith(".json"):
-                import io
-
-                class CapturingWrapper(io.TextIOWrapper):
-                    pass
-
-                # Einfacherer Ansatz: JSON nach dem Schreiben lesen
-                return fh
-            return fh
-
-        # Einfacherer, zuverlässigerer Ansatz über tempfile-Mock
         import io
 
         class FakeTempFile:
@@ -157,7 +164,7 @@ class TestCreateBucketPolicy:
 
         fake_tf = FakeTempFile()
 
-        with patch("mc_commands.run_mc_command", return_value="Policy created"), \
+        with patch("mc_commands.run_mc_command", return_value=json.dumps({"status": "success"})), \
              patch("tempfile.NamedTemporaryFile", return_value=fake_tf), \
              patch("os.unlink"):
             create_bucket_policy("testbucket", "readwrite")
@@ -176,10 +183,14 @@ class TestCreateBucketPolicy:
 # get_bucket_policies
 # ---------------------------------------------------------------------------
 
+def _user_info_json(username: str, policy_name: str) -> str:
+    return json.dumps({"status": "success", "accessKey": username, "policyName": policy_name, "userStatus": "enabled"})
+
+
 class TestGetBucketPolicies:
     def test_returns_matching_policies(self):
-        user_info = "AccessKey: alice\nPolicyName: mybucket-readonly"
-        with patch("mc_commands.list_users", return_value=["alice"]), \
+        user_info = _user_info_json("alice", "mybucket-readonly")
+        with patch("mc_commands.list_users", return_value=[{"name": "alice", "enabled": True}]), \
              patch("mc_commands.run_mc_command", return_value=user_info):
             policies = get_bucket_policies("mybucket")
 
@@ -187,16 +198,16 @@ class TestGetBucketPolicies:
         assert policies[0] == {"user": "alice", "policy": "mybucket-readonly"}
 
     def test_filters_policies_from_other_buckets(self):
-        user_info = "AccessKey: alice\nPolicyName: otherbucket-readonly"
-        with patch("mc_commands.list_users", return_value=["alice"]), \
+        user_info = _user_info_json("alice", "otherbucket-readonly")
+        with patch("mc_commands.list_users", return_value=[{"name": "alice", "enabled": True}]), \
              patch("mc_commands.run_mc_command", return_value=user_info):
             policies = get_bucket_policies("mybucket")
 
         assert policies == []
 
     def test_handles_multiple_policies_per_user(self):
-        user_info = "AccessKey: alice\nPolicyName: mybucket-readonly,mybucket-readwrite"
-        with patch("mc_commands.list_users", return_value=["alice"]), \
+        user_info = _user_info_json("alice", "mybucket-readonly,mybucket-readwrite")
+        with patch("mc_commands.list_users", return_value=[{"name": "alice", "enabled": True}]), \
              patch("mc_commands.run_mc_command", return_value=user_info):
             policies = get_bucket_policies("mybucket")
 
@@ -207,9 +218,9 @@ class TestGetBucketPolicies:
     def test_handles_multiple_users(self):
         def fake_user_info(command):
             user = command[-1]
-            return f"AccessKey: {user}\nPolicyName: mybucket-readonly"
+            return _user_info_json(user, "mybucket-readonly")
 
-        with patch("mc_commands.list_users", return_value=["alice", "bob"]), \
+        with patch("mc_commands.list_users", return_value=[{"name": "alice", "enabled": True}, {"name": "bob", "enabled": True}]), \
              patch("mc_commands.run_mc_command", side_effect=fake_user_info):
             policies = get_bucket_policies("mybucket")
 
@@ -223,11 +234,8 @@ class TestGetBucketPolicies:
         assert policies == []
 
     def test_skips_users_with_mc_error(self):
-        def fake_user_info(command):
-            return "Error: user not found"
-
-        with patch("mc_commands.list_users", return_value=["ghost"]), \
-             patch("mc_commands.run_mc_command", side_effect=fake_user_info):
+        with patch("mc_commands.list_users", return_value=[{"name": "ghost", "enabled": True}]), \
+             patch("mc_commands.run_mc_command", return_value="Error: user not found"):
             policies = get_bucket_policies("mybucket")
 
         assert policies == []
