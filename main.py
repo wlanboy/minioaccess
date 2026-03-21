@@ -40,32 +40,35 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 
-@app.get("/", response_class=HTMLResponse)
-async def index_get(request: Request):
+@app.get("/")
+async def index():
+    return RedirectResponse(url="/users", status_code=302)
+
+
+# ---------------------------------------------------------------------------
+# Users
+# ---------------------------------------------------------------------------
+
+@app.get("/users", response_class=HTMLResponse)
+async def users_get(request: Request):
     message = request.session.pop("message", None)
     users = list_users()
-    buckets = list_buckets()
-    return templates.TemplateResponse("index.html", {
+    return templates.TemplateResponse("users.html", {
         "request": request,
         "users": users,
-        "buckets": buckets,
-        "message": message
+        "message": message,
     })
 
 
-@app.post("/", response_class=HTMLResponse)
-async def index_post(
+@app.post("/users", response_class=HTMLResponse)
+async def users_post(
     request: Request,
     action: str = Form(...),
     access_key: str = Form(None),
     secret_key: str = Form(None),
-    bucket_name: str = Form(None),
-    policy_user: str = Form(None),
-    policy_name: str = Form(None)
 ):
     message = ""
 
-    # Benutzerverwaltung
     if action == "create_user":
         if not access_key or not access_key.strip():
             message = "Fehler: Benutzername darf nicht leer sein."
@@ -101,8 +104,34 @@ async def index_post(
             result = disable_user(access_key.strip())
             message = result if "Error" in result else f"Benutzer '{access_key.strip()}' deaktiviert."
 
-    # Bucket-Verwaltung
-    elif action == "create_bucket":
+    request.session["message"] = message
+    return RedirectResponse(url="/users", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Buckets
+# ---------------------------------------------------------------------------
+
+@app.get("/buckets", response_class=HTMLResponse)
+async def buckets_get(request: Request):
+    message = request.session.pop("message", None)
+    buckets = list_buckets()
+    return templates.TemplateResponse("buckets.html", {
+        "request": request,
+        "buckets": buckets,
+        "message": message,
+    })
+
+
+@app.post("/buckets", response_class=HTMLResponse)
+async def buckets_post(
+    request: Request,
+    action: str = Form(...),
+    bucket_name: str = Form(None),
+):
+    message = ""
+
+    if action == "create_bucket":
         if not bucket_name or not bucket_name.strip():
             message = "Fehler: Bucket-Name darf nicht leer sein."
         else:
@@ -115,14 +144,13 @@ async def index_post(
             result = delete_bucket(bucket_name.strip())
             message = result if "Error" in result else f"Bucket '{bucket_name.strip()}' gelöscht."
 
-    # Policy-Verwaltung
-    elif action == "set_policy":
-        result = attach_policy(policy_name, policy_user)
-        message = result if "Error" in result else f"Policy '{policy_name}' für Benutzer '{policy_user}' gesetzt."
-
     request.session["message"] = message
-    return RedirectResponse(url="/", status_code=303)
+    return RedirectResponse(url="/buckets", status_code=303)
 
+
+# ---------------------------------------------------------------------------
+# Bucket detail
+# ---------------------------------------------------------------------------
 
 @app.get("/bucket/{bucket_name}", response_class=HTMLResponse)
 async def bucket_details(request: Request, bucket_name: str):
@@ -134,7 +162,7 @@ async def bucket_details(request: Request, bucket_name: str):
         "bucket_name": bucket_name,
         "policies": policies,
         "users": users,
-        "message": message
+        "message": message,
     })
 
 
@@ -145,7 +173,7 @@ async def bucket_post(
     action: str = Form(...),
     user: str = Form(None),
     policy: str = Form(None),
-    policy_name: str = Form(None)
+    policy_name: str = Form(None),
 ):
     message = ""
 
@@ -153,7 +181,6 @@ async def bucket_post(
         result = detach_policy(policy, user)
         message = result if "Error" in result else f"Policy '{policy}' von Benutzer '{user}' entfernt."
     elif action == "attach_policy":
-        # Bucket-spezifische Policy erstellen falls nötig
         actual_policy = ensure_bucket_policy(bucket_name, policy_name)
         if "Error" in actual_policy:
             message = actual_policy
@@ -165,6 +192,10 @@ async def bucket_post(
     return RedirectResponse(url=f"/bucket/{bucket_name}", status_code=303)
 
 
+# ---------------------------------------------------------------------------
+# Policies
+# ---------------------------------------------------------------------------
+
 @app.get("/policies", response_class=HTMLResponse)
 async def policies_get(request: Request):
     message = request.session.pop("message", None)
@@ -173,7 +204,7 @@ async def policies_get(request: Request):
     return templates.TemplateResponse("policies.html", {
         "request": request,
         "policies": policies,
-        "message": message
+        "message": message,
     })
 
 
@@ -181,7 +212,7 @@ async def policies_get(request: Request):
 async def policies_post(
     request: Request,
     action: str = Form(...),
-    policy_name: str = Form(None)
+    policy_name: str = Form(None),
 ):
     message = ""
     if action == "delete_policy":
