@@ -10,11 +10,16 @@ from mc_commands import (
     setup_mc_alias,
     list_users,
     list_buckets,
+    list_policies,
+    get_policy_details,
+    delete_policy,
     get_bucket_policies,
     ensure_bucket_policy,
     create_user,
     delete_user,
     change_password,
+    enable_user,
+    disable_user,
     create_bucket,
     delete_bucket,
     attach_policy,
@@ -83,6 +88,18 @@ async def index_post(
         else:
             result = change_password(access_key.strip(), secret_key)
             message = result if "Error" in result else f"Passwort für Benutzer '{access_key.strip()}' geändert."
+    elif action == "enable_user":
+        if not access_key or not access_key.strip():
+            message = "Fehler: Benutzername darf nicht leer sein."
+        else:
+            result = enable_user(access_key.strip())
+            message = result if "Error" in result else f"Benutzer '{access_key.strip()}' aktiviert."
+    elif action == "disable_user":
+        if not access_key or not access_key.strip():
+            message = "Fehler: Benutzername darf nicht leer sein."
+        else:
+            result = disable_user(access_key.strip())
+            message = result if "Error" in result else f"Benutzer '{access_key.strip()}' deaktiviert."
 
     # Bucket-Verwaltung
     elif action == "create_bucket":
@@ -146,6 +163,35 @@ async def bucket_post(
 
     request.session["message"] = message
     return RedirectResponse(url=f"/bucket/{bucket_name}", status_code=303)
+
+
+@app.get("/policies", response_class=HTMLResponse)
+async def policies_get(request: Request):
+    message = request.session.pop("message", None)
+    policy_names = list_policies()
+    policies = [get_policy_details(name) for name in policy_names]
+    return templates.TemplateResponse("policies.html", {
+        "request": request,
+        "policies": policies,
+        "message": message
+    })
+
+
+@app.post("/policies", response_class=HTMLResponse)
+async def policies_post(
+    request: Request,
+    action: str = Form(...),
+    policy_name: str = Form(None)
+):
+    message = ""
+    if action == "delete_policy":
+        if not policy_name or not policy_name.strip():
+            message = "Fehler: Policy-Name darf nicht leer sein."
+        else:
+            result = delete_policy(policy_name.strip())
+            message = result if "Error" in result else f"Policy '{policy_name.strip()}' gelöscht."
+    request.session["message"] = message
+    return RedirectResponse(url="/policies", status_code=303)
 
 
 if __name__ == "__main__":
