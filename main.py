@@ -53,8 +53,7 @@ async def index():
 async def users_get(request: Request):
     message = request.session.pop("message", None)
     users = list_users()
-    return templates.TemplateResponse("users.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "users.html", {
         "users": users,
         "message": message,
     })
@@ -116,8 +115,7 @@ async def users_post(
 async def buckets_get(request: Request):
     message = request.session.pop("message", None)
     buckets = list_buckets()
-    return templates.TemplateResponse("buckets.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "buckets.html", {
         "buckets": buckets,
         "message": message,
     })
@@ -157,8 +155,7 @@ async def bucket_details(request: Request, bucket_name: str):
     message = request.session.pop("message", None)
     policies = get_bucket_policies(bucket_name)
     users = list_users()
-    return templates.TemplateResponse("bucket.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "bucket.html", {
         "bucket_name": bucket_name,
         "policies": policies,
         "users": users,
