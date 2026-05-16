@@ -198,8 +198,7 @@ async def policies_get(request: Request):
     message = request.session.pop("message", None)
     policy_names = list_policies()
     policies = [get_policy_details(name) for name in policy_names]
-    return templates.TemplateResponse("policies.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "policies.html", {
         "policies": policies,
         "message": message,
     })
