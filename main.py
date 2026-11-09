@@ -1,4 +1,5 @@
-import re
+import logging
+import os
 from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
 
@@ -8,8 +9,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from mc_commands import (
+    POLICY_TYPES,
     attach_policy,
     change_password,
+    check_connection,
     create_bucket,
     create_user,
     delete_bucket,
@@ -21,21 +24,23 @@ from mc_commands import (
     ensure_bucket_policy,
     get_bucket_policies,
     get_policy_details,
+    is_valid_access_key,
+    is_valid_bucket,
+    is_valid_policy_name,
+    is_valid_secret,
     list_buckets,
     list_policies,
     list_users,
-    setup_mc_alias,
 )
 
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
+
 MIN_SECRET_LENGTH = 12
-POLICY_TYPES = ("readonly", "readwrite", "writeonly")
-# S3-Regeln: 3–63 Zeichen, Kleinbuchstaben/Ziffern/Punkt/Bindestrich, keine "..".
-BUCKET_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    setup_mc_alias()
+    check_connection()
     yield
 
 
@@ -123,14 +128,40 @@ def _require_name(value: str, label: str) -> str:
 
 def _require_bucket(value: str) -> str:
     value = _require_name(value, "Bucket-Name")
-    if not BUCKET_RE.fullmatch(value) or ".." in value:
+    if not is_valid_bucket(value):
         _fail(f"Fehler: Ungültiger Bucket-Name '{value}'.")
+    return value
+
+
+def _require_existing_bucket(value: str) -> str:
+    value = _require_bucket(value)
+    if value not in list_buckets():
+        raise HTTPException(status_code=404, detail=f"Fehler: Bucket '{value}' existiert nicht.")
+    return value
+
+
+def _require_user(value: str) -> str:
+    value = _require_name(value, "Benutzername")
+    if not is_valid_access_key(value):
+        _fail(
+            f"Fehler: Ungültiger Benutzername '{value}' (3–128 Zeichen aus A–Z, a–z, 0–9 und ._@=+,-, "
+            "nicht mit '-' beginnend)."
+        )
+    return value
+
+
+def _require_policy(value: str) -> str:
+    value = _require_name(value, "Policy-Name")
+    if not is_valid_policy_name(value):
+        _fail(f"Fehler: Ungültiger Policy-Name '{value}'.")
     return value
 
 
 def _require_secret(secret: str, label: str):
     if len(secret) < MIN_SECRET_LENGTH:
         _fail(f"Fehler: {label} muss mindestens {MIN_SECRET_LENGTH} Zeichen lang sein.")
+    if not is_valid_secret(secret):
+        _fail(f"Fehler: {label} darf nicht mit '-' beginnen.")
 
 
 # Die Endpunkte sind bewusst synchron (def statt async def): mc läuft per
@@ -147,33 +178,33 @@ def users_list():
 
 @app.post("/api/users")
 def users_create(body: UserCreate):
-    name = _require_name(body.access_key, "Benutzername")
+    name = _require_user(body.access_key)
     _require_secret(body.secret_key, "Das Secret")
     return _result(create_user(name, body.secret_key), f"Benutzer '{name}' erstellt.")
 
 
 @app.delete("/api/users/{name}")
 def users_delete(name: str):
-    name = _require_name(name, "Benutzername")
+    name = _require_user(name)
     return _result(delete_user(name), f"Benutzer '{name}' gelöscht.")
 
 
 @app.put("/api/users/{name}/password")
 def users_password(name: str, body: PasswordChange):
-    name = _require_name(name, "Benutzername")
+    name = _require_user(name)
     _require_secret(body.secret_key, "Das neue Passwort")
     return _result(change_password(name, body.secret_key), f"Passwort für Benutzer '{name}' geändert.")
 
 
 @app.post("/api/users/{name}/enable")
 def users_enable(name: str):
-    name = _require_name(name, "Benutzername")
+    name = _require_user(name)
     return _result(enable_user(name), f"Benutzer '{name}' aktiviert.")
 
 
 @app.post("/api/users/{name}/disable")
 def users_disable(name: str):
-    name = _require_name(name, "Benutzername")
+    name = _require_user(name)
     return _result(disable_user(name), f"Benutzer '{name}' deaktiviert.")
 
 
@@ -194,21 +225,19 @@ def buckets_create(body: BucketCreate):
 
 @app.delete("/api/buckets/{name}")
 def buckets_delete(name: str):
-    name = _require_name(name, "Bucket-Name")
+    name = _require_bucket(name)
     return _result(delete_bucket(name), f"Bucket '{name}' gelöscht.")
 
 
 @app.get("/api/buckets/{name}/policies")
 def bucket_policies(name: str):
-    return get_bucket_policies(name)
+    return get_bucket_policies(_require_existing_bucket(name))
 
 
 @app.post("/api/buckets/{name}/policies")
 def bucket_policy_attach(name: str, body: PolicyAttach):
-    name = _require_bucket(name)
-    if name not in list_buckets():
-        raise HTTPException(status_code=404, detail=f"Fehler: Bucket '{name}' existiert nicht.")
-    user = _require_name(body.user, "Benutzer")
+    name = _require_existing_bucket(name)
+    user = _require_user(body.user)
     if body.policy_type not in POLICY_TYPES:
         _fail(f"Fehler: Unbekannter Policy-Typ '{body.policy_type}'.")
     policy = ensure_bucket_policy(name, body.policy_type)
@@ -222,6 +251,9 @@ def bucket_policy_attach(name: str, body: PolicyAttach):
 
 @app.delete("/api/buckets/{name}/policies/{policy}/users/{user}")
 def bucket_policy_detach(name: str, policy: str, user: str):
+    _require_bucket(name)
+    policy = _require_policy(policy)
+    user = _require_user(user)
     return _result(detach_policy(policy, user), f"Policy '{policy}' von Benutzer '{user}' entfernt.")
 
 
@@ -236,7 +268,7 @@ def policies_list():
 
 @app.delete("/api/policies/{name}")
 def policies_delete(name: str):
-    name = _require_name(name, "Policy-Name")
+    name = _require_policy(name)
     return _result(delete_policy(name), f"Policy '{name}' gelöscht.")
 
 

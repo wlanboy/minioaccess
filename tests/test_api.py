@@ -174,3 +174,87 @@ class TestBuckets:
             res = client.delete("/api/buckets/data/policies/data-readonly/users/bob", headers=CSRF)
         assert res.status_code == 200
         detach.assert_called_once_with("data-readonly", "bob")
+
+    def test_attach_invalid_user(self, client):
+        with (
+            patch.object(main, "list_buckets", return_value=["data"]),
+            patch.object(main, "ensure_bucket_policy") as ensure,
+        ):
+            res = client.post("/api/buckets/data/policies", headers=CSRF,
+                              json={"user": "--insecure", "policy_type": "readonly"})
+        assert res.status_code == 400
+        ensure.assert_not_called()
+
+    def test_policies_unknown_bucket(self, client):
+        with (
+            patch.object(main, "list_buckets", return_value=["data"]),
+            patch.object(main, "get_bucket_policies") as get,
+        ):
+            res = client.get("/api/buckets/other/policies")
+        assert res.status_code == 404
+        get.assert_not_called()
+
+    def test_policies_invalid_bucket(self, client):
+        with patch.object(main, "get_bucket_policies") as get:
+            res = client.get("/api/buckets/*/policies")
+        assert res.status_code == 400
+        get.assert_not_called()
+
+    def test_ip_bucket_name_rejected(self, client):
+        with patch.object(main, "create_bucket") as create:
+            res = client.post("/api/buckets", headers=CSRF, json={"name": "192.168.1.10"})
+        assert res.status_code == 400
+        create.assert_not_called()
+
+    def test_detach_invalid_values(self, client):
+        with patch.object(main, "detach_policy") as detach:
+            assert client.delete("/api/buckets/data/policies/--help/users/bob", headers=CSRF).status_code == 400
+            assert client.delete("/api/buckets/data/policies/data-readonly/users/-x", headers=CSRF).status_code == 400
+        detach.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Argument-Injection (Werte, die mc als Flag lesen würde)
+# ---------------------------------------------------------------------------
+
+class TestArgumentInjection:
+    @pytest.mark.parametrize("name", ["--insecure", "-h", "ab", "a b", "a/b", "x" * 129])
+    def test_create_user_invalid_name(self, client, name):
+        with patch.object(main, "create_user") as create:
+            res = client.post("/api/users", headers=CSRF, json={"access_key": name, "secret_key": "x" * 12})
+        assert res.status_code == 400
+        create.assert_not_called()
+
+    def test_create_user_secret_starting_with_dash(self, client):
+        with patch.object(main, "create_user") as create:
+            res = client.post("/api/users", headers=CSRF,
+                              json={"access_key": "alice", "secret_key": "--insecure-123"})
+        assert res.status_code == 400
+        create.assert_not_called()
+
+    @pytest.mark.parametrize("path", [
+        "/api/users/--help/disable",
+        "/api/users/--help/enable",
+    ])
+    def test_user_actions_reject_flags(self, client, path):
+        with patch.object(main, "disable_user") as disable, patch.object(main, "enable_user") as enable:
+            assert client.post(path, headers=CSRF).status_code == 400
+        disable.assert_not_called()
+        enable.assert_not_called()
+
+    def test_delete_user_rejects_flag(self, client):
+        with patch.object(main, "delete_user") as delete:
+            assert client.delete("/api/users/--help", headers=CSRF).status_code == 400
+        delete.assert_not_called()
+
+    def test_delete_policy_rejects_flag(self, client):
+        with patch.object(main, "delete_policy") as delete:
+            assert client.delete("/api/policies/--help", headers=CSRF).status_code == 400
+        delete.assert_not_called()
+
+    def test_valid_user_with_special_chars(self, client):
+        with patch.object(main, "create_user", return_value="") as create:
+            res = client.post("/api/users", headers=CSRF,
+                              json={"access_key": "svc.backup@team=a+b,c-d", "secret_key": "x" * 12})
+        assert res.status_code == 200
+        create.assert_called_once()

@@ -1,12 +1,21 @@
 import json
+import subprocess
 from unittest.mock import patch
 
+import pytest
+
 from mc_commands import (
+    MC_BINARY,
+    check_connection,
+    create_bucket,
     create_bucket_policy,
+    create_user,
     get_bucket_policies,
     get_policy_actions,
+    is_valid_bucket,
     list_buckets,
     list_users,
+    run_mc_command,
 )
 
 # ---------------------------------------------------------------------------
@@ -238,3 +247,90 @@ class TestGetBucketPolicies:
             policies = get_bucket_policies("mybucket")
 
         assert policies == []
+
+
+# ---------------------------------------------------------------------------
+# run_mc_command: Credentials nur per MC_HOST_<alias>
+# ---------------------------------------------------------------------------
+
+def _completed(returncode=0, stdout="", stderr=""):
+    return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
+
+
+@pytest.fixture(autouse=False)
+def mc_config():
+    """Feste Werte, unabhängig von .env oder der Shell-Umgebung."""
+    with patch.multiple("mc_commands", MINIO_ALIAS="test", MINIO_ENDPOINT="http://localhost:9000",
+                        MINIO_ACCESS_KEY="testkey", MINIO_SECRET_KEY="testsecret"):
+        yield
+
+
+@pytest.mark.usefixtures("mc_config")
+class TestRunMcCommand:
+    def test_credentials_in_env_not_argv(self):
+        with patch("mc_commands.subprocess.run", return_value=_completed(stdout="ok")) as run:
+            run_mc_command([MC_BINARY, "--json", "ls", "test"])
+        argv = run.call_args.args[0]
+        env = run.call_args.kwargs["env"]
+        assert "testsecret" not in " ".join(argv)
+        assert env["MC_HOST_test"] == "http://testkey:testsecret@localhost:9000"
+
+    def test_special_chars_are_url_encoded(self):
+        with patch("mc_commands.MINIO_SECRET_KEY", "p@ss:w/rd%"), \
+             patch("mc_commands.subprocess.run", return_value=_completed()) as run:
+            run_mc_command([MC_BINARY, "ls", "test"])
+        assert run.call_args.kwargs["env"]["MC_HOST_test"] == "http://testkey:p%40ss%3Aw%2Frd%25@localhost:9000"
+
+    def test_invalid_endpoint(self):
+        with patch("mc_commands.MINIO_ENDPOINT", "localhost:9000"), pytest.raises(RuntimeError):
+            run_mc_command([MC_BINARY, "ls", "test"])
+
+    def test_stdout_not_logged(self, caplog):
+        caplog.set_level("DEBUG")
+        with patch("mc_commands.subprocess.run", return_value=_completed(stdout='{"secretKey":"leak"}')):
+            run_mc_command([MC_BINARY, "--json", "admin", "user", "info", "test", "bob"])
+        assert "leak" not in caplog.text
+        assert "bob" not in caplog.text
+
+    def test_json_error_message(self):
+        out = json.dumps({"status": "error", "error": {"message": "boom"}})
+        with patch("mc_commands.subprocess.run", return_value=_completed(returncode=1, stdout=out)):
+            assert run_mc_command([MC_BINARY, "ls", "test"]) == "Error: boom"
+
+    def test_check_connection_uses_admin_info(self):
+        with patch("mc_commands.run_mc_command", return_value="{}") as run:
+            check_connection()
+        assert run.call_args.args[0] == [MC_BINARY, "--json", "admin", "info", "test"]
+
+    def test_check_connection_fails(self):
+        with patch("mc_commands.run_mc_command", return_value="Error: refused"), pytest.raises(RuntimeError):
+            check_connection()
+
+
+# ---------------------------------------------------------------------------
+# Validierung als letzte Sicherung vor mc
+# ---------------------------------------------------------------------------
+
+class TestValidation:
+    @pytest.mark.parametrize("name", ["data", "my-bucket", "a.b.c", "abc123"])
+    def test_valid_buckets(self, name):
+        assert is_valid_bucket(name)
+
+    @pytest.mark.parametrize("name", ["*", "ab", "-abc", "abc-", "a..b", "Upper", "a/b", "10.0.0.1"])
+    def test_invalid_buckets(self, name):
+        assert not is_valid_bucket(name)
+
+    def test_create_bucket_rejects_wildcard(self):
+        with patch("mc_commands.run_mc_command") as run, pytest.raises(ValueError):
+            create_bucket("*")
+        run.assert_not_called()
+
+    def test_create_user_rejects_flag(self):
+        with patch("mc_commands.run_mc_command") as run, pytest.raises(ValueError):
+            create_user("--insecure", "x" * 12)
+        run.assert_not_called()
+
+    def test_create_bucket_policy_rejects_wildcard(self):
+        with patch("mc_commands.run_mc_command") as run, pytest.raises(ValueError):
+            create_bucket_policy("*", "readwrite")
+        run.assert_not_called()

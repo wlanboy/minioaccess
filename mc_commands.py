@@ -1,13 +1,19 @@
+import ipaddress
 import json
+import logging
 import os
+import re
 import subprocess
 import tempfile
+from urllib.parse import quote, urlsplit
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
 MC_BINARY = "./mc"
+
+logger = logging.getLogger(__name__)
 
 
 def _require_env(name: str) -> str:
@@ -23,11 +29,86 @@ MINIO_ACCESS_KEY = _require_env("MINIO_ACCESS_KEY")
 MINIO_SECRET_KEY = _require_env("MINIO_SECRET_KEY")
 
 
-def run_mc_command(command: list[str]) -> str:
+# ---------------------------------------------------------------------------
+# Eingabeprüfung
+# ---------------------------------------------------------------------------
+# Alle Werte landen als Argumente im mc-Aufruf. Was mit "-" beginnt, liest mc
+# als Flag (z. B. "--insecure"), deshalb ist "-" am Anfang nirgends erlaubt.
+
+POLICY_TYPES = ("readonly", "readwrite", "writeonly")
+# S3-Regeln: 3–63 Zeichen, Kleinbuchstaben/Ziffern/Punkt/Bindestrich.
+_BUCKET_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
+_ACCESS_KEY_RE = re.compile(r"^(?!-)[A-Za-z0-9._@=+,-]{3,128}$")
+_POLICY_NAME_RE = re.compile(r"^(?!-)[A-Za-z0-9._@=+,-]{1,128}$")
+
+
+def is_valid_bucket(name: str) -> bool:
+    if not _BUCKET_RE.fullmatch(name) or ".." in name:
+        return False
     try:
-        result = subprocess.run(command, capture_output=True, text=True, check=False)
-        print(f"MC Command: {result.stdout}")
+        ipaddress.IPv4Address(name)
+        return False
+    except ValueError:
+        return True
+
+
+def is_valid_access_key(name: str) -> bool:
+    return bool(_ACCESS_KEY_RE.fullmatch(name))
+
+
+def is_valid_policy_name(name: str) -> bool:
+    return bool(_POLICY_NAME_RE.fullmatch(name))
+
+
+def is_valid_secret(secret: str) -> bool:
+    return not secret.startswith("-")
+
+
+def _check(valid: bool, label: str, value: str):
+    """Letzte Sicherung vor dem mc-Aufruf; die API prüft vorher selbst und meldet 400."""
+    if not valid:
+        raise ValueError(f"Ungültiger Wert für {label}: {value!r}")
+
+
+# ---------------------------------------------------------------------------
+# mc-Aufruf
+# ---------------------------------------------------------------------------
+# Kein "mc alias set": Das Secret stünde sonst in /proc/<pid>/cmdline und in
+# ~/.mc/config.json. mc liest den Alias stattdessen aus MC_HOST_<alias>, das
+# nur in der Umgebung des Subprozesses steht.
+
+def _mc_host_url() -> str:
+    parts = urlsplit(MINIO_ENDPOINT)
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        raise RuntimeError(f"MINIO_ENDPOINT muss mit http:// oder https:// beginnen: {MINIO_ENDPOINT!r}")
+    user = quote(MINIO_ACCESS_KEY, safe="")
+    password = quote(MINIO_SECRET_KEY, safe="")
+    return f"{parts.scheme}://{user}:{password}@{parts.netloc}"
+
+
+def _mc_env() -> dict[str, str]:
+    return {**os.environ, f"MC_HOST_{MINIO_ALIAS}": _mc_host_url()}
+
+
+def _describe(command: list[str]) -> str:
+    """Name der mc-Aktion ohne Argumente (z. B. "admin user add") fürs Log."""
+    words = []
+    for word in command[1:]:
+        if word.startswith("-"):
+            continue
+        if word == MINIO_ALIAS or word.startswith(f"{MINIO_ALIAS}/"):
+            break
+        words.append(word)
+    return " ".join(words)
+
+
+def run_mc_command(command: list[str]) -> str:
+    action = _describe(command)
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False, env=_mc_env())
+        logger.debug("mc %s: exit %d", action, result.returncode)
         if result.returncode != 0:
+            logger.warning("mc %s fehlgeschlagen (exit %d)", action, result.returncode)
             error_output = result.stdout.strip() or result.stderr.strip()
             try:
                 data = json.loads(error_output.split('\n')[0])
@@ -37,6 +118,7 @@ def run_mc_command(command: list[str]) -> str:
                 return f"Error: {error_output}"
         return result.stdout.strip()
     except (OSError, subprocess.SubprocessError) as e:
+        logger.warning("mc %s fehlgeschlagen: %s", action, e)
         return f"Error: {e}"
 
 
@@ -56,12 +138,12 @@ def _parse_ndjson(output: str) -> list[dict]:
     return results
 
 
-def setup_mc_alias():
-    command = [MC_BINARY, "--json", "alias", "set", MINIO_ALIAS, MINIO_ENDPOINT, MINIO_ACCESS_KEY, MINIO_SECRET_KEY]
-    output = run_mc_command(command)
+def check_connection():
+    """Prüft beim Start, ob MinIO mit den Admin-Credentials erreichbar ist."""
+    output = run_mc_command([MC_BINARY, "--json", "admin", "info", MINIO_ALIAS])
     if output.startswith("Error"):
-        raise RuntimeError(f"MinIO alias setup failed: {output}")
-    print(f"MC Alias Setup: OK ({MINIO_ALIAS} → {MINIO_ENDPOINT})")
+        raise RuntimeError(f"MinIO nicht erreichbar: {output}")
+    logger.info("MinIO-Verbindung OK (%s → %s)", MINIO_ALIAS, MINIO_ENDPOINT)
 
 
 def list_users():
@@ -76,10 +158,12 @@ def list_users():
 
 
 def enable_user(access_key: str) -> str:
+    _check(is_valid_access_key(access_key), "Benutzer", access_key)
     return run_mc_command([MC_BINARY, "--json", "admin", "user", "enable", MINIO_ALIAS, access_key])
 
 
 def disable_user(access_key: str) -> str:
+    _check(is_valid_access_key(access_key), "Benutzer", access_key)
     return run_mc_command([MC_BINARY, "--json", "admin", "user", "disable", MINIO_ALIAS, access_key])
 
 
@@ -107,6 +191,7 @@ def get_policy_actions(policy_type: str) -> list:
 
 def create_bucket_policy(bucket: str, policy_type: str) -> str:
     """Erstellt eine bucket-spezifische Policy und gibt den Policy-Namen zurück."""
+    _check(is_valid_bucket(bucket), "Bucket", bucket)
     policy_name = f"{bucket}-{policy_type}"
     actions = get_policy_actions(policy_type)
 
@@ -144,6 +229,8 @@ def create_bucket_policy(bucket: str, policy_type: str) -> str:
 
 def ensure_bucket_policy(bucket: str, policy_type: str) -> str:
     """Stellt sicher, dass eine bucket-spezifische Policy existiert."""
+    _check(is_valid_bucket(bucket), "Bucket", bucket)
+    _check(policy_type in POLICY_TYPES, "Policy-Typ", policy_type)
     policy_name = f"{bucket}-{policy_type}"
     output = run_mc_command([MC_BINARY, "--json", "admin", "policy", "info", MINIO_ALIAS, policy_name])
     if "Error" in output:
@@ -153,6 +240,7 @@ def ensure_bucket_policy(bucket: str, policy_type: str) -> str:
 
 def get_bucket_policies(bucket: str):
     """Holt alle User-Policy-Zuordnungen für ein Bucket."""
+    _check(is_valid_bucket(bucket), "Bucket", bucket)
     policies = []
     bucket_policy_prefix = f"{bucket}-"
 
@@ -209,39 +297,51 @@ def get_policy_details(policy_name: str) -> dict:
 
 def delete_policy(policy_name: str) -> str:
     """Löscht eine Policy."""
+    _check(is_valid_policy_name(policy_name), "Policy", policy_name)
     return run_mc_command([MC_BINARY, "--json", "admin", "policy", "remove", MINIO_ALIAS, policy_name])
 
 
 def create_user(access_key: str, secret_key: str) -> str:
     """Erstellt einen neuen Benutzer."""
+    _check(is_valid_access_key(access_key), "Benutzer", access_key)
+    _check(is_valid_secret(secret_key), "Secret", secret_key)
     return run_mc_command([MC_BINARY, "--json", "admin", "user", "add", MINIO_ALIAS, access_key, secret_key])
 
 
 def delete_user(access_key: str) -> str:
     """Löscht einen Benutzer."""
+    _check(is_valid_access_key(access_key), "Benutzer", access_key)
     return run_mc_command([MC_BINARY, "--json", "admin", "user", "remove", MINIO_ALIAS, access_key])
 
 
 def change_password(access_key: str, secret_key: str) -> str:
     """Ändert das Passwort eines Benutzers."""
+    _check(is_valid_access_key(access_key), "Benutzer", access_key)
+    _check(is_valid_secret(secret_key), "Secret", secret_key)
     return run_mc_command([MC_BINARY, "--json", "admin", "user", "add", MINIO_ALIAS, access_key, secret_key])
 
 
 def create_bucket(bucket_name: str) -> str:
     """Erstellt einen neuen Bucket."""
+    _check(is_valid_bucket(bucket_name), "Bucket", bucket_name)
     return run_mc_command([MC_BINARY, "--json", "mb", f"{MINIO_ALIAS}/{bucket_name}"])
 
 
 def delete_bucket(bucket_name: str) -> str:
     """Löscht einen Bucket."""
+    _check(is_valid_bucket(bucket_name), "Bucket", bucket_name)
     return run_mc_command([MC_BINARY, "--json", "rb", "--force", f"{MINIO_ALIAS}/{bucket_name}"])
 
 
 def attach_policy(policy_name: str, user: str) -> str:
     """Weist einem Benutzer eine Policy zu."""
+    _check(is_valid_policy_name(policy_name), "Policy", policy_name)
+    _check(is_valid_access_key(user), "Benutzer", user)
     return run_mc_command([MC_BINARY, "--json", "admin", "policy", "attach", MINIO_ALIAS, policy_name, "--user", user])
 
 
 def detach_policy(policy_name: str, user: str) -> str:
     """Entfernt eine Policy von einem Benutzer."""
+    _check(is_valid_policy_name(policy_name), "Policy", policy_name)
+    _check(is_valid_access_key(user), "Benutzer", user)
     return run_mc_command([MC_BINARY, "--json", "admin", "policy", "detach", MINIO_ALIAS, policy_name, "--user", user])
