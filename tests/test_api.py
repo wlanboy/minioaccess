@@ -258,3 +258,27 @@ class TestArgumentInjection:
                               json={"access_key": "svc.backup@team=a+b,c-d", "secret_key": "x" * 12})
         assert res.status_code == 200
         create.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Bucket löschen: Default ohne --force
+# ---------------------------------------------------------------------------
+
+class TestBucketDelete:
+    def test_default_without_force(self, client):
+        with patch.object(main, "delete_bucket", return_value="") as delete:
+            res = client.delete("/api/buckets/data", headers=CSRF)
+        assert res.status_code == 200
+        delete.assert_called_once_with("data", False)
+
+    def test_force(self, client):
+        with patch.object(main, "delete_bucket", return_value="") as delete:
+            res = client.delete("/api/buckets/data?force=true", headers=CSRF)
+        assert res.status_code == 200
+        assert "inklusive aller Objekte" in res.json()["message"]
+        delete.assert_called_once_with("data", True)
+
+    def test_not_empty_error_is_400(self, client):
+        with patch.object(main, "delete_bucket", return_value="Error: bucket is not empty"):
+            res = client.delete("/api/buckets/data", headers=CSRF)
+        assert res.status_code == 400

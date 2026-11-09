@@ -10,6 +10,7 @@ from mc_commands import (
     create_bucket,
     create_bucket_policy,
     create_user,
+    delete_bucket,
     get_bucket_policies,
     get_policy_actions,
     is_valid_bucket,
@@ -334,3 +335,17 @@ class TestValidation:
         with patch("mc_commands.run_mc_command") as run, pytest.raises(ValueError):
             create_bucket_policy("*", "readwrite")
         run.assert_not_called()
+
+
+class TestDeleteBucket:
+    @pytest.mark.usefixtures("mc_config")
+    def test_without_force(self):
+        with patch("mc_commands.run_mc_command", return_value="") as run:
+            delete_bucket("data")
+        assert run.call_args.args[0] == [MC_BINARY, "--json", "rb", "test/data"]
+
+    @pytest.mark.usefixtures("mc_config")
+    def test_with_force(self):
+        with patch("mc_commands.run_mc_command", return_value="") as run:
+            delete_bucket("data", force=True)
+        assert run.call_args.args[0] == [MC_BINARY, "--json", "rb", "--force", "test/data"]

@@ -327,10 +327,11 @@ def create_bucket(bucket_name: str) -> str:
     return run_mc_command([MC_BINARY, "--json", "mb", f"{MINIO_ALIAS}/{bucket_name}"])
 
 
-def delete_bucket(bucket_name: str) -> str:
-    """Löscht einen Bucket."""
+def delete_bucket(bucket_name: str, force: bool = False) -> str:
+    """Löscht einen Bucket. Ohne force schlägt das bei einem nicht leeren Bucket fehl."""
     _check(is_valid_bucket(bucket_name), "Bucket", bucket_name)
-    return run_mc_command([MC_BINARY, "--json", "rb", "--force", f"{MINIO_ALIAS}/{bucket_name}"])
+    flags = ["--force"] if force else []
+    return run_mc_command([MC_BINARY, "--json", "rb", *flags, f"{MINIO_ALIAS}/{bucket_name}"])
 
 
 def attach_policy(policy_name: str, user: str) -> str:

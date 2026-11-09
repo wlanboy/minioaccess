@@ -510,6 +510,11 @@ td.actions .btn + .btn { margin-left: 2px; }
 .dialog h3 { font-size: 17px; }
 .dialog p { color: var(--text-muted); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+.dialog-check { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+.dialog-check input { width: auto; margin-top: 3px; accent-color: var(--danger); }
+.dialog-field { display: flex; flex-direction: column; gap: 6px; color: var(--text-muted); }
+.dialog-field[hidden] { display: none; }
+.dialog-field input { font-family: var(--mono); }
 
 /* Animationen ------------------------------------------------------------ */
 

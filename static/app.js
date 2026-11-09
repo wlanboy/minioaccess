@@ -177,6 +177,48 @@ function searchInput(placeholder, onInput) {
 }
 
 /** Passwortfeld mit Anzeigen- und Generieren-Button. */
+/**
+ * Rückfrage vor dem Löschen eines Buckets. Standard: nur leere Buckets (mc rb).
+ * Mit Häkchen wird der Inhalt mitgelöscht (rb --force); dann muss der Name
+ * eingetippt werden. Ergibt `{ force }` oder bei Abbruch `null`.
+ */
+function confirmBucketDelete(bucket) {
+    const dialog = document.getElementById("dialog");
+    const force = h("input", { type: "checkbox" });
+    const nameField = h("input", { placeholder: bucket, autocomplete: "off", spellcheck: "false" });
+    const nameRow = h("label", { class: "dialog-field", hidden: true },
+        h("span", null, "Zur Bestätigung den Bucket-Namen eingeben:"), nameField);
+    const ok = h("button", { value: "ok", class: "btn btn-danger" }, "Löschen");
+
+    const update = () => {
+        nameRow.hidden = !force.checked;
+        ok.disabled = force.checked && nameField.value !== bucket;
+    };
+    force.addEventListener("change", () => { update(); if (force.checked) nameField.focus(); });
+    nameField.addEventListener("input", update);
+
+    dialog.replaceChildren(h("form", { method: "dialog" },
+        h("h3", null, "Bucket löschen?"),
+        h("p", null, `„${bucket}“ wird nur gelöscht, wenn er leer ist.`),
+        h("label", { class: "dialog-check" }, force,
+            h("span", null, "Inhalt mitlöschen (alle Objekte, nicht rückgängig zu machen)")),
+        nameRow,
+        h("div", { class: "dialog-actions" },
+            h("button", { value: "cancel", class: "btn btn-ghost", formnovalidate: true }, "Abbrechen"),
+            ok,
+        ),
+    ));
+
+    return new Promise((resolve) => {
+        dialog.addEventListener("close", () => {
+            resolve(dialog.returnValue === "ok" ? { force: force.checked } : null);
+        }, { once: true });
+        dialog.returnValue = "";
+        dialog.showModal();
+        dialog.querySelector(".btn-ghost").focus();
+    });
+}
+
 function passwordField(input) {
     const toggle = button("", {
         variant: "btn-ghost btn-icon", iconName: "eye", title: "Anzeigen",
@@ -333,12 +375,11 @@ async function bucketsView() {
                 variant: "btn-ghost btn-icon danger", iconName: "trash", title: "Löschen",
                 onclick: async (e) => {
                     e.preventDefault();
-                    const ok = await openDialog({
-                        title: "Bucket löschen?",
-                        text: `„${b}“ wird inklusive aller Objekte gelöscht (rb --force). Das lässt sich nicht rückgängig machen.`,
-                        confirmLabel: "Löschen", danger: true,
-                    });
-                    if (ok) await mutate(del, "DELETE", `/buckets/${enc(b)}`);
+                    const choice = await confirmBucketDelete(b);
+                    if (choice) {
+                        const query = choice.force ? "?force=true" : "";
+                        await mutate(del, "DELETE", `/buckets/${enc(b)}${query}`);
+                    }
                 },
             });
             return h("div", { class: "bucket-tile" },

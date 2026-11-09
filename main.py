@@ -224,9 +224,11 @@ def buckets_create(body: BucketCreate):
 
 
 @app.delete("/api/buckets/{name}")
-def buckets_delete(name: str):
+def buckets_delete(name: str, force: bool = False):
+    """Löscht nur leere Buckets, außer mit ?force=true (dann samt Inhalt)."""
     name = _require_bucket(name)
-    return _result(delete_bucket(name), f"Bucket '{name}' gelöscht.")
+    suffix = " inklusive aller Objekte" if force else ""
+    return _result(delete_bucket(name, force), f"Bucket '{name}'{suffix} gelöscht.")
 
 
 @app.get("/api/buckets/{name}/policies")
