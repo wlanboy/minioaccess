@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import main
+from mc_commands import McError
 
 CSRF = {"X-Requested-With": "minioaccess"}
 
@@ -99,10 +100,28 @@ class TestUsers:
         assert res.status_code == 400
 
     def test_mc_error_becomes_400(self, client):
-        with patch.object(main, "delete_user", return_value="Error: user not found"):
+        with patch.object(main, "delete_user", side_effect=McError("user not found")):
             res = client.delete("/api/users/bob", headers=CSRF)
         assert res.status_code == 400
-        assert res.json()["detail"] == "Error: user not found"
+        assert res.json()["detail"] == "Fehler: user not found"
+
+    def test_list_error_is_reported(self, client):
+        """Regression 2.3: MinIO nicht erreichbar ergibt einen Fehler, keine leere Liste."""
+        with patch.object(main, "list_users", side_effect=McError("connection refused")):
+            res = client.get("/api/users")
+        assert res.status_code == 400
+        assert "connection refused" in res.json()["detail"]
+
+    def test_timeout_is_504(self, client):
+        with patch.object(main, "list_users", side_effect=McError("MinIO antwortet nicht", 504)):
+            assert client.get("/api/users").status_code == 504
+
+    def test_error_in_name_is_success(self, client):
+        """Regression 2.2: Ein Name mit „Error“ ist kein Fehler."""
+        with patch.object(main, "create_user", return_value="") as create:
+            res = client.post("/api/users", headers=CSRF, json={"access_key": "Error-bot", "secret_key": "x" * 12})
+        assert res.status_code == 200
+        create.assert_called_once_with("Error-bot", "x" * 12)
 
     def test_change_password(self, client):
         with patch.object(main, "change_password", return_value="") as change:
@@ -141,7 +160,19 @@ class TestBuckets:
         ensure.assert_called_once_with("data", "readonly")
         attach.assert_called_once_with("data-readonly", "bob")
 
+    def test_attach_policy_create_error(self, client):
+        with (
+            patch.object(main, "list_buckets", return_value=["data"]),
+            patch.object(main, "ensure_bucket_policy", side_effect=McError("access denied")),
+            patch.object(main, "attach_policy") as attach,
+        ):
+            res = client.post("/api/buckets/data/policies", headers=CSRF,
+                              json={"user": "bob", "policy_type": "readonly"})
+        assert res.status_code == 400
+        attach.assert_not_called()
+
     def test_attach_unknown_type(self, client):
+        """Regression 2.1: Der Bucket-Name als Policy-Typ (alte Option „bucket-spezifisch“) wird abgelehnt."""
         with (
             patch.object(main, "list_buckets", return_value=["data"]),
             patch.object(main, "ensure_bucket_policy") as ensure,
@@ -279,6 +310,6 @@ class TestBucketDelete:
         delete.assert_called_once_with("data", True)
 
     def test_not_empty_error_is_400(self, client):
-        with patch.object(main, "delete_bucket", return_value="Error: bucket is not empty"):
+        with patch.object(main, "delete_bucket", side_effect=McError("bucket is not empty")):
             res = client.delete("/api/buckets/data", headers=CSRF)
         assert res.status_code == 400

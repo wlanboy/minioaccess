@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from mc_commands import (
     POLICY_TYPES,
+    McError,
     attach_policy,
     change_password,
     check_connection,
@@ -45,6 +46,12 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+@app.exception_handler(McError)
+async def mc_error_handler(_request: Request, exc: McError):
+    """Fehler aus mc (Exit-Code ≠ 0, Timeout, mc fehlt) als Fehlermeldung an das Frontend."""
+    return JSONResponse({"detail": f"Fehler: {exc.message}"}, status_code=exc.status)
 
 
 # ---------------------------------------------------------------------------
@@ -112,11 +119,8 @@ def _fail(message: str):
     raise HTTPException(status_code=400, detail=message)
 
 
-def _result(result: str, success: str) -> dict:
-    """Wandelt die Ausgabe eines mc-Aufrufs in eine API-Antwort um."""
-    if "Error" in result:
-        _fail(result)
-    return {"message": success}
+def _ok(message: str) -> dict:
+    return {"message": message}
 
 
 def _require_name(value: str, label: str) -> str:
@@ -180,32 +184,37 @@ def users_list():
 def users_create(body: UserCreate):
     name = _require_user(body.access_key)
     _require_secret(body.secret_key, "Das Secret")
-    return _result(create_user(name, body.secret_key), f"Benutzer '{name}' erstellt.")
+    create_user(name, body.secret_key)
+    return _ok(f"Benutzer '{name}' erstellt.")
 
 
 @app.delete("/api/users/{name}")
 def users_delete(name: str):
     name = _require_user(name)
-    return _result(delete_user(name), f"Benutzer '{name}' gelöscht.")
+    delete_user(name)
+    return _ok(f"Benutzer '{name}' gelöscht.")
 
 
 @app.put("/api/users/{name}/password")
 def users_password(name: str, body: PasswordChange):
     name = _require_user(name)
     _require_secret(body.secret_key, "Das neue Passwort")
-    return _result(change_password(name, body.secret_key), f"Passwort für Benutzer '{name}' geändert.")
+    change_password(name, body.secret_key)
+    return _ok(f"Passwort für Benutzer '{name}' geändert.")
 
 
 @app.post("/api/users/{name}/enable")
 def users_enable(name: str):
     name = _require_user(name)
-    return _result(enable_user(name), f"Benutzer '{name}' aktiviert.")
+    enable_user(name)
+    return _ok(f"Benutzer '{name}' aktiviert.")
 
 
 @app.post("/api/users/{name}/disable")
 def users_disable(name: str):
     name = _require_user(name)
-    return _result(disable_user(name), f"Benutzer '{name}' deaktiviert.")
+    disable_user(name)
+    return _ok(f"Benutzer '{name}' deaktiviert.")
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +229,8 @@ def buckets_list():
 @app.post("/api/buckets")
 def buckets_create(body: BucketCreate):
     name = _require_bucket(body.name)
-    return _result(create_bucket(name), f"Bucket '{name}' erstellt.")
+    create_bucket(name)
+    return _ok(f"Bucket '{name}' erstellt.")
 
 
 @app.delete("/api/buckets/{name}")
@@ -228,7 +238,8 @@ def buckets_delete(name: str, force: bool = False):
     """Löscht nur leere Buckets, außer mit ?force=true (dann samt Inhalt)."""
     name = _require_bucket(name)
     suffix = " inklusive aller Objekte" if force else ""
-    return _result(delete_bucket(name, force), f"Bucket '{name}'{suffix} gelöscht.")
+    delete_bucket(name, force)
+    return _ok(f"Bucket '{name}'{suffix} gelöscht.")
 
 
 @app.get("/api/buckets/{name}/policies")
@@ -243,12 +254,8 @@ def bucket_policy_attach(name: str, body: PolicyAttach):
     if body.policy_type not in POLICY_TYPES:
         _fail(f"Fehler: Unbekannter Policy-Typ '{body.policy_type}'.")
     policy = ensure_bucket_policy(name, body.policy_type)
-    if "Error" in policy:
-        _fail(policy)
-    return _result(
-        attach_policy(policy, user),
-        f"Policy '{policy}' für Benutzer '{user}' auf Bucket '{name}' gesetzt.",
-    )
+    attach_policy(policy, user)
+    return _ok(f"Policy '{policy}' für Benutzer '{user}' auf Bucket '{name}' gesetzt.")
 
 
 @app.delete("/api/buckets/{name}/policies/{policy}/users/{user}")
@@ -256,7 +263,8 @@ def bucket_policy_detach(name: str, policy: str, user: str):
     _require_bucket(name)
     policy = _require_policy(policy)
     user = _require_user(user)
-    return _result(detach_policy(policy, user), f"Policy '{policy}' von Benutzer '{user}' entfernt.")
+    detach_policy(policy, user)
+    return _ok(f"Policy '{policy}' von Benutzer '{user}' entfernt.")
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +279,8 @@ def policies_list():
 @app.delete("/api/policies/{name}")
 def policies_delete(name: str):
     name = _require_policy(name)
-    return _result(delete_policy(name), f"Policy '{name}' gelöscht.")
+    delete_policy(name)
+    return _ok(f"Policy '{name}' gelöscht.")
 
 
 # Statisches Frontend zuletzt einhängen, damit /api/* Vorrang hat.

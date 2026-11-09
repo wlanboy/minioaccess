@@ -41,6 +41,9 @@ RUN chown -R appuser:appuser /app
 # Auf non-root User wechseln
 USER appuser
 
+# Absoluter Pfad, unabhängig vom Arbeitsverzeichnis
+ENV MC_BINARY=/app/mc
+
 EXPOSE 9002
 
 # Uvicorn starten

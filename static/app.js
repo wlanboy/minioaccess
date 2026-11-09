@@ -407,7 +407,7 @@ async function bucketsView() {
 const POLICY_TYPES = [
     { value: "readonly", label: "Lesen", hint: "GetObject, ListBucket" },
     { value: "readwrite", label: "Lesen & Schreiben", hint: "s3:*" },
-    { value: "writeonly", label: "Schreiben", hint: "PutObject" },
+    { value: "writeonly", label: "Schreiben", hint: "PutObject, Multipart" },
 ];
 
 async function bucketView(bucket) {

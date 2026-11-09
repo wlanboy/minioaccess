@@ -1,46 +1,72 @@
 import json
+import os
 import subprocess
 from unittest.mock import patch
 
 import pytest
 
+import mc_commands
 from mc_commands import (
     MC_BINARY,
+    McError,
     check_connection,
     create_bucket,
     create_bucket_policy,
     create_user,
     delete_bucket,
+    ensure_bucket_policy,
     get_bucket_policies,
-    get_policy_actions,
+    get_policy_details,
     is_valid_bucket,
     list_buckets,
     list_users,
+    policy_statements,
     run_mc_command,
 )
 
+REFUSED = McError("connection refused")
+
 # ---------------------------------------------------------------------------
-# get_policy_actions
+# policy_statements
 # ---------------------------------------------------------------------------
 
-class TestGetPolicyActions:
+def _by_resource(statements: list[dict]) -> dict[str, set[str]]:
+    result: dict[str, set[str]] = {}
+    for stmt in statements:
+        assert stmt["Effect"] == "Allow"
+        for resource in stmt["Resource"]:
+            result.setdefault(resource, set()).update(stmt["Action"])
+    return result
+
+
+class TestPolicyStatements:
     def test_readonly(self):
-        actions = get_policy_actions("readonly")
-        assert "s3:GetObject" in actions
-        assert "s3:GetBucketLocation" in actions
-        assert "s3:ListBucket" in actions
+        assert _by_resource(policy_statements("data", "readonly")) == {
+            "arn:aws:s3:::data": {"s3:GetBucketLocation", "s3:ListBucket"},
+            "arn:aws:s3:::data/*": {"s3:GetObject"},
+        }
 
     def test_readwrite(self):
-        actions = get_policy_actions("readwrite")
-        assert actions == ["s3:*"]
+        assert _by_resource(policy_statements("data", "readwrite")) == {
+            "arn:aws:s3:::data": {"s3:*"},
+            "arn:aws:s3:::data/*": {"s3:*"},
+        }
 
-    def test_writeonly(self):
-        actions = get_policy_actions("writeonly")
-        assert actions == ["s3:PutObject"]
+    def test_writeonly_allows_multipart(self):
+        assert _by_resource(policy_statements("data", "writeonly")) == {
+            "arn:aws:s3:::data": {"s3:GetBucketLocation", "s3:ListBucketMultipartUploads"},
+            "arn:aws:s3:::data/*": {"s3:PutObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"},
+        }
 
-    def test_unknown_type_returns_empty(self):
-        assert get_policy_actions("admin") == []
-        assert get_policy_actions("") == []
+    def test_writeonly_cannot_read(self):
+        actions = set().union(*_by_resource(policy_statements("data", "writeonly")).values())
+        assert "s3:GetObject" not in actions
+        assert "s3:ListBucket" not in actions
+
+    @pytest.mark.parametrize("policy_type", ["admin", "", "data"])
+    def test_unknown_type_raises(self, policy_type):
+        with pytest.raises(ValueError):
+            policy_statements("data", policy_type)
 
 
 # ---------------------------------------------------------------------------
@@ -63,9 +89,10 @@ class TestListUsers:
         with patch("mc_commands.run_mc_command", return_value=output):
             assert list_users() == [{"name": "alice", "enabled": True}, {"name": "bob", "enabled": False}]
 
-    def test_returns_empty_list_on_error(self):
-        with patch("mc_commands.run_mc_command", return_value="Error: connection refused"):
-            assert list_users() == []
+    def test_error_is_raised(self):
+        """Regression 2.3: MinIO nicht erreichbar darf nicht als leere Liste erscheinen."""
+        with patch("mc_commands.run_mc_command", side_effect=REFUSED), pytest.raises(McError):
+            list_users()
 
     def test_ignores_empty_lines(self):
         output = f"{_user_json('alice', True)}\n\n{_user_json('bob', True)}\n"
@@ -98,9 +125,9 @@ class TestListBuckets:
             buckets = list_buckets()
         assert buckets == ["mybucket"]
 
-    def test_returns_empty_on_error(self):
-        with patch("mc_commands.run_mc_command", return_value="Error: connection refused"):
-            assert list_buckets() == []
+    def test_error_is_raised(self):
+        with patch("mc_commands.run_mc_command", side_effect=REFUSED), pytest.raises(McError):
+            list_buckets()
 
     def test_empty_output_returns_empty_list(self):
         with patch("mc_commands.run_mc_command", return_value=""):
@@ -125,18 +152,23 @@ class TestCreateBucketPolicy:
         assert result == "mybucket-readonly"
 
     def test_returns_policy_name_if_already_exists(self):
-        with patch("mc_commands.run_mc_command", return_value="Error: policy already exists"):
+        with patch("mc_commands.run_mc_command", side_effect=McError("policy already exists")):
             result = create_bucket_policy("mybucket", "readwrite")
         assert result == "mybucket-readwrite"
 
-    def test_returns_error_on_other_errors(self):
-        with patch("mc_commands.run_mc_command", return_value="Error: connection refused"):
-            result = create_bucket_policy("mybucket", "readonly")
-        assert result.startswith("Error")
+    def test_raises_on_other_errors(self):
+        with patch("mc_commands.run_mc_command", side_effect=REFUSED), pytest.raises(McError):
+            create_bucket_policy("mybucket", "readonly")
 
-    def test_unknown_policy_type_returns_error(self):
-        result = create_bucket_policy("mybucket", "unknown")
-        assert result.startswith("Error")
+    def test_unknown_policy_type_raises(self):
+        with patch("mc_commands.run_mc_command") as run, pytest.raises(ValueError):
+            create_bucket_policy("mybucket", "unknown")
+        run.assert_not_called()
+
+    def test_error_in_name_is_not_an_error(self):
+        """Regression 2.2: „Error“ in der Ausgabe ist kein Fehler, nur der Exit-Code zählt."""
+        with patch("mc_commands.run_mc_command", return_value='{"status":"success","policy":"Error-bucket"}'):
+            assert create_bucket_policy("mybucket", "readonly") == "mybucket-readonly"
 
     def test_policy_json_structure(self):
         """Prüft, dass die erzeugte Policy das korrekte JSON-Format hat."""
@@ -181,11 +213,43 @@ class TestCreateBucketPolicy:
         assert len(written_json) == 1
         policy = written_json[0]
         assert policy["Version"] == "2012-10-17"
-        stmt = policy["Statement"][0]
-        assert stmt["Effect"] == "Allow"
-        assert "arn:aws:s3:::testbucket" in stmt["Resource"]
-        assert "arn:aws:s3:::testbucket/*" in stmt["Resource"]
-        assert stmt["Action"] == ["s3:*"]
+        assert policy["Statement"] == policy_statements("testbucket", "readwrite")
+
+
+class TestEnsureBucketPolicy:
+    def test_existing_policy_is_reused(self):
+        with patch("mc_commands.list_policies", return_value=["data-readonly"]), \
+             patch("mc_commands.create_bucket_policy") as create:
+            assert ensure_bucket_policy("data", "readonly") == "data-readonly"
+        create.assert_not_called()
+
+    def test_missing_policy_is_created(self):
+        with patch("mc_commands.list_policies", return_value=[]), \
+             patch("mc_commands.create_bucket_policy", return_value="data-writeonly") as create:
+            assert ensure_bucket_policy("data", "writeonly") == "data-writeonly"
+        create.assert_called_once_with("data", "writeonly")
+
+    def test_list_error_is_raised(self):
+        with patch("mc_commands.list_policies", side_effect=REFUSED), \
+             patch("mc_commands.create_bucket_policy") as create, pytest.raises(McError):
+            ensure_bucket_policy("data", "readonly")
+        create.assert_not_called()
+
+
+class TestGetPolicyDetails:
+    def test_action_as_string(self):
+        doc = {"status": "success", "policy": {"Statement": [
+            {"Effect": "Allow", "Action": "s3:GetObject", "Resource": "arn:aws:s3:::data/*"},
+            {"Effect": "Allow", "Action": ["s3:ListBucket"], "Resource": ["arn:aws:s3:::data"]},
+        ]}}
+        with patch("mc_commands.run_mc_command", return_value=json.dumps(doc)):
+            details = get_policy_details("p")
+        assert details["actions"] == ["s3:GetObject", "s3:ListBucket"]
+        assert details["resources"] == ["arn:aws:s3:::data/*", "arn:aws:s3:::data"]
+
+    def test_error_is_raised(self):
+        with patch("mc_commands.run_mc_command", side_effect=REFUSED), pytest.raises(McError):
+            get_policy_details("p")
 
 
 # ---------------------------------------------------------------------------
@@ -244,10 +308,15 @@ class TestGetBucketPolicies:
 
     def test_skips_users_with_mc_error(self):
         with patch("mc_commands.list_users", return_value=[{"name": "ghost", "enabled": True}]), \
-             patch("mc_commands.run_mc_command", return_value="Error: user not found"):
+             patch("mc_commands.run_mc_command", side_effect=McError("user not found")):
             policies = get_bucket_policies("mybucket")
 
         assert policies == []
+
+    def test_timeout_is_raised(self):
+        with patch("mc_commands.list_users", return_value=[{"name": "alice", "enabled": True}]), \
+             patch("mc_commands.run_mc_command", side_effect=McError("timeout", 504)), pytest.raises(McError):
+            get_bucket_policies("mybucket")
 
 
 # ---------------------------------------------------------------------------
@@ -295,17 +364,86 @@ class TestRunMcCommand:
 
     def test_json_error_message(self):
         out = json.dumps({"status": "error", "error": {"message": "boom"}})
-        with patch("mc_commands.subprocess.run", return_value=_completed(returncode=1, stdout=out)):
-            assert run_mc_command([MC_BINARY, "ls", "test"]) == "Error: boom"
+        with patch("mc_commands.subprocess.run", return_value=_completed(returncode=1, stdout=out)), \
+             pytest.raises(McError) as exc:
+            run_mc_command([MC_BINARY, "ls", "test"])
+        assert exc.value.message == "boom"
+        assert exc.value.status == 400
 
-    def test_check_connection_uses_admin_info(self):
+    def test_text_error_message(self):
+        with patch("mc_commands.subprocess.run", return_value=_completed(returncode=1, stderr="mc: <ERROR> nope")), \
+             pytest.raises(McError) as exc:
+            run_mc_command([MC_BINARY, "ls", "test"])
+        assert exc.value.message == "mc: <ERROR> nope"
+
+    def test_error_text_in_stdout_with_exit_0_is_success(self):
+        """Regression 2.2: Nur der Exit-Code entscheidet."""
+        with patch("mc_commands.subprocess.run", return_value=_completed(stdout="Error-user")):
+            assert run_mc_command([MC_BINARY, "ls", "test"]) == "Error-user"
+
+    def test_timeout(self):
+        with patch("mc_commands.MC_TIMEOUT", 3.0), \
+             patch("mc_commands.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="mc", timeout=3)) as run, \
+             pytest.raises(McError) as exc:
+            run_mc_command([MC_BINARY, "ls", "test"])
+        assert run.call_args.kwargs["timeout"] == 3.0
+        assert exc.value.status == 504
+        assert "Timeout" in exc.value.message
+
+    def test_os_error(self):
+        with patch("mc_commands.subprocess.run", side_effect=FileNotFoundError("./mc")), \
+             pytest.raises(McError) as exc:
+            run_mc_command([MC_BINARY, "ls", "test"])
+        assert exc.value.status == 500
+
+
+@pytest.fixture
+def fake_mc(tmp_path):
+    path = tmp_path / "mc"
+    path.write_text("#!/bin/sh\n")
+    path.chmod(0o755)
+    with patch("mc_commands.MC_BINARY", str(path)):
+        yield str(path)
+
+
+@pytest.mark.usefixtures("mc_config")
+class TestCheckConnection:
+    def test_uses_admin_info(self, fake_mc):
         with patch("mc_commands.run_mc_command", return_value="{}") as run:
             check_connection()
-        assert run.call_args.args[0] == [MC_BINARY, "--json", "admin", "info", "test"]
+        assert run.call_args.args[0] == [fake_mc, "--json", "admin", "info", "test"]
 
-    def test_check_connection_fails(self):
-        with patch("mc_commands.run_mc_command", return_value="Error: refused"), pytest.raises(RuntimeError):
+    def test_fails_when_minio_unreachable(self, fake_mc):
+        with patch("mc_commands.run_mc_command", side_effect=REFUSED), pytest.raises(RuntimeError):
             check_connection()
+
+    def test_fails_when_binary_missing(self, tmp_path):
+        with patch("mc_commands.MC_BINARY", str(tmp_path / "missing")), \
+             patch("mc_commands.run_mc_command") as run, pytest.raises(RuntimeError, match="MC_BINARY"):
+            check_connection()
+        run.assert_not_called()
+
+    def test_fails_when_not_executable(self, fake_mc):
+        os.chmod(fake_mc, 0o644)
+        with patch("mc_commands.run_mc_command") as run, pytest.raises(RuntimeError):
+            check_connection()
+        run.assert_not_called()
+
+
+class TestResolveMcBinary:
+    def test_env_wins(self, monkeypatch):
+        monkeypatch.setenv("MC_BINARY", "/opt/mc")
+        assert mc_commands._resolve_mc_binary() == "/opt/mc"
+
+    def test_path_fallback(self, monkeypatch):
+        monkeypatch.delenv("MC_BINARY", raising=False)
+        with patch("mc_commands.shutil.which", return_value="/usr/bin/mc"):
+            assert mc_commands._resolve_mc_binary() == "/usr/bin/mc"
+
+    def test_local_fallback(self, monkeypatch):
+        monkeypatch.delenv("MC_BINARY", raising=False)
+        with patch("mc_commands.shutil.which", return_value=None):
+            assert mc_commands._resolve_mc_binary() == "./mc"
 
 
 # ---------------------------------------------------------------------------

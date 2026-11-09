@@ -50,6 +50,9 @@ export MINIO_ACCESS_KEY=xxxxxx
 export MINIO_SECRET_KEY=xxxxxx
 export MINIO_ENDPOINT=https://gmk.lan:9000
 export MINIO_ALIAS=gmk
+# optional
+export MC_BINARY=/usr/local/bin/mc   # default: mc from PATH, else ./mc (Docker image: /app/mc)
+export MC_TIMEOUT=15                 # seconds per mc call, default 15
 ```
 
 ## Docker run
