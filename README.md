@@ -4,11 +4,15 @@
   * users
   * buckets
   * ACLs
+  * policies
+* frontend: static HTML + vanilla JS (no framework, no build step), served by FastAPI from `static/`
+* JSON API under `/api/*`; write requests require the header `X-Requested-With: minioaccess` (CSRF protection)
 
 ## Screenhots
 ![Users](screenshots/users.png)
 ![Buckets](screenshots/buckets.png)
 ![ACLs](screenshots/acls.png)
+![Policies](screenshots/policies.png)
 
 ## get uv - makes python life easier
 ```

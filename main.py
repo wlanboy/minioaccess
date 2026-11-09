@@ -1,11 +1,11 @@
-import os
+import re
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
 
-from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-from starlette.middleware.sessions import SessionMiddleware
+from pydantic import BaseModel
 
 from mc_commands import (
     attach_policy,
@@ -27,6 +27,11 @@ from mc_commands import (
     setup_mc_alias,
 )
 
+MIN_SECRET_LENGTH = 12
+POLICY_TYPES = ("readonly", "readwrite", "writeonly")
+# S3-Regeln: 3–63 Zeichen, Kleinbuchstaben/Ziffern/Punkt/Bindestrich, keine "..".
+BUCKET_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -35,191 +40,208 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
-app.add_middleware(SessionMiddleware, secret_key=os.urandom(24).hex())
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-templates = Jinja2Templates(directory="templates")
 
 
-@app.get("/")
-async def index():
-    return RedirectResponse(url="/users", status_code=302)
+# ---------------------------------------------------------------------------
+# CSRF-Schutz
+# ---------------------------------------------------------------------------
+# Schreibende API-Aufrufe brauchen den Header X-Requested-With. Einen eigenen
+# Header kann eine fremde Seite nur nach einem CORS-Preflight setzen, und den
+# beantwortet die App nicht (keine CORS-Middleware). Formular-POSTs und
+# no-cors-fetch() von fremden Seiten scheitern damit. Sec-Fetch-Site und Origin
+# werden zusätzlich geprüft, falls der Browser sie mitschickt.
 
+CSRF_HEADER = "x-requested-with"
+CSRF_VALUE = "minioaccess"
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+def _csrf_violation(request: Request) -> str | None:
+    if request.headers.get(CSRF_HEADER) != CSRF_VALUE:
+        return "CSRF-Header fehlt."
+    fetch_site = request.headers.get("sec-fetch-site")
+    if fetch_site and fetch_site not in ("same-origin", "none"):
+        return f"Cross-Site-Anfrage abgelehnt ({fetch_site})."
+    origin = request.headers.get("origin")
+    if origin and urlsplit(origin).netloc != request.headers.get("host"):
+        return "Origin passt nicht zum Host."
+    return None
+
+
+@app.middleware("http")
+async def csrf_protect(request: Request, call_next):
+    if request.method not in SAFE_METHODS and request.url.path.startswith("/api/"):
+        violation = _csrf_violation(request)
+        if violation:
+            return JSONResponse({"detail": f"Fehler: {violation}"}, status_code=403)
+    return await call_next(request)
+
+
+# ---------------------------------------------------------------------------
+# Request-Modelle
+# ---------------------------------------------------------------------------
+
+class UserCreate(BaseModel):
+    access_key: str
+    secret_key: str
+
+
+class PasswordChange(BaseModel):
+    secret_key: str
+
+
+class BucketCreate(BaseModel):
+    name: str
+
+
+class PolicyAttach(BaseModel):
+    user: str
+    policy_type: str
+
+
+# ---------------------------------------------------------------------------
+# Hilfsfunktionen
+# ---------------------------------------------------------------------------
+
+def _fail(message: str):
+    raise HTTPException(status_code=400, detail=message)
+
+
+def _result(result: str, success: str) -> dict:
+    """Wandelt die Ausgabe eines mc-Aufrufs in eine API-Antwort um."""
+    if "Error" in result:
+        _fail(result)
+    return {"message": success}
+
+
+def _require_name(value: str, label: str) -> str:
+    value = value.strip()
+    if not value:
+        _fail(f"Fehler: {label} darf nicht leer sein.")
+    return value
+
+
+def _require_bucket(value: str) -> str:
+    value = _require_name(value, "Bucket-Name")
+    if not BUCKET_RE.fullmatch(value) or ".." in value:
+        _fail(f"Fehler: Ungültiger Bucket-Name '{value}'.")
+    return value
+
+
+def _require_secret(secret: str, label: str):
+    if len(secret) < MIN_SECRET_LENGTH:
+        _fail(f"Fehler: {label} muss mindestens {MIN_SECRET_LENGTH} Zeichen lang sein.")
+
+
+# Die Endpunkte sind bewusst synchron (def statt async def): mc läuft per
+# subprocess und blockiert, FastAPI führt sie deshalb im Threadpool aus.
 
 # ---------------------------------------------------------------------------
 # Users
 # ---------------------------------------------------------------------------
 
-@app.get("/users", response_class=HTMLResponse)
-async def users_get(request: Request):
-    message = request.session.pop("message", None)
-    users = list_users()
-    return templates.TemplateResponse(request, "users.html", {
-        "users": users,
-        "message": message,
-    })
+@app.get("/api/users")
+def users_list():
+    return list_users()
 
 
-@app.post("/users", response_class=HTMLResponse)
-async def users_post(
-    request: Request,
-    action: str = Form(...),
-    access_key: str = Form(None),
-    secret_key: str = Form(None),
-):
-    message = ""
+@app.post("/api/users")
+def users_create(body: UserCreate):
+    name = _require_name(body.access_key, "Benutzername")
+    _require_secret(body.secret_key, "Das Secret")
+    return _result(create_user(name, body.secret_key), f"Benutzer '{name}' erstellt.")
 
-    if action == "create_user":
-        if not access_key or not access_key.strip():
-            message = "Fehler: Benutzername darf nicht leer sein."
-        elif not secret_key or len(secret_key) < 12:
-            message = "Fehler: Das Secret muss mindestens 12 Zeichen lang sein."
-        else:
-            result = create_user(access_key.strip(), secret_key)
-            message = result if "Error" in result else f"Benutzer '{access_key.strip()}' erstellt."
-    elif action == "delete_user":
-        if not access_key or not access_key.strip():
-            message = "Fehler: Benutzername darf nicht leer sein."
-        else:
-            result = delete_user(access_key.strip())
-            message = result if "Error" in result else f"Benutzer '{access_key.strip()}' gelöscht."
-    elif action == "change_password":
-        if not access_key or not access_key.strip():
-            message = "Fehler: Benutzername darf nicht leer sein."
-        elif not secret_key or len(secret_key) < 12:
-            message = "Fehler: Das neue Passwort muss mindestens 12 Zeichen lang sein."
-        else:
-            result = change_password(access_key.strip(), secret_key)
-            message = result if "Error" in result else f"Passwort für Benutzer '{access_key.strip()}' geändert."
-    elif action == "enable_user":
-        if not access_key or not access_key.strip():
-            message = "Fehler: Benutzername darf nicht leer sein."
-        else:
-            result = enable_user(access_key.strip())
-            message = result if "Error" in result else f"Benutzer '{access_key.strip()}' aktiviert."
-    elif action == "disable_user":
-        if not access_key or not access_key.strip():
-            message = "Fehler: Benutzername darf nicht leer sein."
-        else:
-            result = disable_user(access_key.strip())
-            message = result if "Error" in result else f"Benutzer '{access_key.strip()}' deaktiviert."
 
-    request.session["message"] = message
-    return RedirectResponse(url="/users", status_code=303)
+@app.delete("/api/users/{name}")
+def users_delete(name: str):
+    name = _require_name(name, "Benutzername")
+    return _result(delete_user(name), f"Benutzer '{name}' gelöscht.")
+
+
+@app.put("/api/users/{name}/password")
+def users_password(name: str, body: PasswordChange):
+    name = _require_name(name, "Benutzername")
+    _require_secret(body.secret_key, "Das neue Passwort")
+    return _result(change_password(name, body.secret_key), f"Passwort für Benutzer '{name}' geändert.")
+
+
+@app.post("/api/users/{name}/enable")
+def users_enable(name: str):
+    name = _require_name(name, "Benutzername")
+    return _result(enable_user(name), f"Benutzer '{name}' aktiviert.")
+
+
+@app.post("/api/users/{name}/disable")
+def users_disable(name: str):
+    name = _require_name(name, "Benutzername")
+    return _result(disable_user(name), f"Benutzer '{name}' deaktiviert.")
 
 
 # ---------------------------------------------------------------------------
 # Buckets
 # ---------------------------------------------------------------------------
 
-@app.get("/buckets", response_class=HTMLResponse)
-async def buckets_get(request: Request):
-    message = request.session.pop("message", None)
-    buckets = list_buckets()
-    return templates.TemplateResponse(request, "buckets.html", {
-        "buckets": buckets,
-        "message": message,
-    })
+@app.get("/api/buckets")
+def buckets_list():
+    return list_buckets()
 
 
-@app.post("/buckets", response_class=HTMLResponse)
-async def buckets_post(
-    request: Request,
-    action: str = Form(...),
-    bucket_name: str = Form(None),
-):
-    message = ""
-
-    if action == "create_bucket":
-        if not bucket_name or not bucket_name.strip():
-            message = "Fehler: Bucket-Name darf nicht leer sein."
-        else:
-            result = create_bucket(bucket_name.strip())
-            message = result if "Error" in result else f"Bucket '{bucket_name.strip()}' erstellt."
-    elif action == "delete_bucket":
-        if not bucket_name or not bucket_name.strip():
-            message = "Fehler: Bucket-Name darf nicht leer sein."
-        else:
-            result = delete_bucket(bucket_name.strip())
-            message = result if "Error" in result else f"Bucket '{bucket_name.strip()}' gelöscht."
-
-    request.session["message"] = message
-    return RedirectResponse(url="/buckets", status_code=303)
+@app.post("/api/buckets")
+def buckets_create(body: BucketCreate):
+    name = _require_bucket(body.name)
+    return _result(create_bucket(name), f"Bucket '{name}' erstellt.")
 
 
-# ---------------------------------------------------------------------------
-# Bucket detail
-# ---------------------------------------------------------------------------
-
-@app.get("/bucket/{bucket_name}", response_class=HTMLResponse)
-async def bucket_details(request: Request, bucket_name: str):
-    message = request.session.pop("message", None)
-    policies = get_bucket_policies(bucket_name)
-    users = list_users()
-    return templates.TemplateResponse(request, "bucket.html", {
-        "bucket_name": bucket_name,
-        "policies": policies,
-        "users": users,
-        "message": message,
-    })
+@app.delete("/api/buckets/{name}")
+def buckets_delete(name: str):
+    name = _require_name(name, "Bucket-Name")
+    return _result(delete_bucket(name), f"Bucket '{name}' gelöscht.")
 
 
-@app.post("/bucket/{bucket_name}", response_class=HTMLResponse)
-async def bucket_post(
-    request: Request,
-    bucket_name: str,
-    action: str = Form(...),
-    user: str = Form(None),
-    policy: str = Form(None),
-    policy_name: str = Form(None),
-):
-    message = ""
+@app.get("/api/buckets/{name}/policies")
+def bucket_policies(name: str):
+    return get_bucket_policies(name)
 
-    if action == "detach_policy":
-        result = detach_policy(policy, user)
-        message = result if "Error" in result else f"Policy '{policy}' von Benutzer '{user}' entfernt."
-    elif action == "attach_policy":
-        actual_policy = ensure_bucket_policy(bucket_name, policy_name)
-        if "Error" in actual_policy:
-            message = actual_policy
-        else:
-            result = attach_policy(actual_policy, user)
-            message = result if "Error" in result else f"Policy '{actual_policy}' für Benutzer '{user}' auf Bucket '{bucket_name}' gesetzt."
 
-    request.session["message"] = message
-    return RedirectResponse(url=f"/bucket/{bucket_name}", status_code=303)
+@app.post("/api/buckets/{name}/policies")
+def bucket_policy_attach(name: str, body: PolicyAttach):
+    name = _require_bucket(name)
+    if name not in list_buckets():
+        raise HTTPException(status_code=404, detail=f"Fehler: Bucket '{name}' existiert nicht.")
+    user = _require_name(body.user, "Benutzer")
+    if body.policy_type not in POLICY_TYPES:
+        _fail(f"Fehler: Unbekannter Policy-Typ '{body.policy_type}'.")
+    policy = ensure_bucket_policy(name, body.policy_type)
+    if "Error" in policy:
+        _fail(policy)
+    return _result(
+        attach_policy(policy, user),
+        f"Policy '{policy}' für Benutzer '{user}' auf Bucket '{name}' gesetzt.",
+    )
+
+
+@app.delete("/api/buckets/{name}/policies/{policy}/users/{user}")
+def bucket_policy_detach(name: str, policy: str, user: str):
+    return _result(detach_policy(policy, user), f"Policy '{policy}' von Benutzer '{user}' entfernt.")
 
 
 # ---------------------------------------------------------------------------
 # Policies
 # ---------------------------------------------------------------------------
 
-@app.get("/policies", response_class=HTMLResponse)
-async def policies_get(request: Request):
-    message = request.session.pop("message", None)
-    policy_names = list_policies()
-    policies = [get_policy_details(name) for name in policy_names]
-    return templates.TemplateResponse(request, "policies.html", {
-        "policies": policies,
-        "message": message,
-    })
+@app.get("/api/policies")
+def policies_list():
+    return [get_policy_details(name) for name in list_policies()]
 
 
-@app.post("/policies", response_class=HTMLResponse)
-async def policies_post(
-    request: Request,
-    action: str = Form(...),
-    policy_name: str = Form(None),
-):
-    message = ""
-    if action == "delete_policy":
-        if not policy_name or not policy_name.strip():
-            message = "Fehler: Policy-Name darf nicht leer sein."
-        else:
-            result = delete_policy(policy_name.strip())
-            message = result if "Error" in result else f"Policy '{policy_name.strip()}' gelöscht."
-    request.session["message"] = message
-    return RedirectResponse(url="/policies", status_code=303)
+@app.delete("/api/policies/{name}")
+def policies_delete(name: str):
+    name = _require_name(name, "Policy-Name")
+    return _result(delete_policy(name), f"Policy '{name}' gelöscht.")
+
+
+# Statisches Frontend zuletzt einhängen, damit /api/* Vorrang hat.
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
 
 if __name__ == "__main__":

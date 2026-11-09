@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark">
+    <title>MinIO Admin</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' rx='6' fill='%23c72e49'/><path d='M7 17V7l5 6 5-6v10' stroke='white' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+    <link rel="stylesheet" href="/style.css">
+    <script src="/app.js" defer></script>
+</head>
+<body>
+    <aside class="sidebar">
+        <div class="brand">
+            <span class="brand-logo" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M7 17V7l5 6 5-6v10"/></svg>
+            </span>
+            <div>
+                <div class="brand-title">MinIO Admin</div>
+                <div class="brand-sub">Community Edition</div>
+            </div>
+        </div>
+        <nav class="nav">
+            <a href="#/users" data-route="users">
+                <svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                Benutzer
+            </a>
+            <a href="#/buckets" data-route="buckets">
+                <svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/></svg>
+                Buckets
+            </a>
+            <a href="#/policies" data-route="policies">
+                <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                Policies
+            </a>
+        </nav>
+    </aside>
+
+    <main id="view" class="content" aria-live="polite"></main>
+
+    <div id="toasts" class="toasts" role="status"></div>
+
+    <dialog id="dialog" class="dialog"></dialog>
+</body>
+</html>
