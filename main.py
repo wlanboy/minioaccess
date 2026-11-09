@@ -172,6 +172,26 @@ def _require_secret(secret: str, label: str):
 # subprocess und blockiert, FastAPI führt sie deshalb im Threadpool aus.
 
 # ---------------------------------------------------------------------------
+# Probes (Kubernetes, Docker HEALTHCHECK)
+# ---------------------------------------------------------------------------
+
+@app.get("/healthz")
+def healthz():
+    """Liveness: Der Prozess antwortet. Ruft mc nicht auf."""
+    return {"status": "ok"}
+
+
+@app.get("/readyz")
+def readyz():
+    """Readiness: MinIO ist mit den Admin-Credentials erreichbar (`mc admin info`)."""
+    try:
+        mc_commands.ping()
+    except McError as e:
+        return JSONResponse({"status": "unavailable", "detail": e.message}, status_code=503)
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
 # Users
 # ---------------------------------------------------------------------------
 

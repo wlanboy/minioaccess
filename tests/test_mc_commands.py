@@ -433,9 +433,20 @@ def fake_mc(tmp_path, use_settings):
 
 class TestCheckConnection:
     def test_uses_admin_info(self, fake_mc):
-        with patch("mc_commands.run_mc_command", return_value="{}") as run:
+        with patch("mc_commands.run_mc_command", return_value='{"status":"success","info":{}}') as run:
             check_connection()
         assert run.call_args.args[0] == ["admin", "info", "test"]
+
+    def test_fails_on_error_status_with_exit_0(self, fake_mc):
+        """mc admin info meldet „connection refused“ mit Exit 0, nur im JSON steht status=error."""
+        output = '{"status":"error","error":"dial tcp 127.0.0.1:9: connect: connection refused","info":{}}'
+        with patch("mc_commands.run_mc_command", return_value=output), \
+                pytest.raises(RuntimeError, match="connection refused"):
+            check_connection()
+
+    def test_fails_on_non_json_output(self, fake_mc):
+        with patch("mc_commands.run_mc_command", return_value="garbage"), pytest.raises(RuntimeError):
+            check_connection()
 
     def test_fails_when_minio_unreachable(self, fake_mc):
         with patch("mc_commands.run_mc_command", side_effect=REFUSED), pytest.raises(RuntimeError):

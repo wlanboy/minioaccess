@@ -313,3 +313,36 @@ class TestBucketDelete:
         with patch.object(main, "delete_bucket", side_effect=McError("bucket is not empty")):
             res = client.delete("/api/buckets/data", headers=CSRF)
         assert res.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Probes
+# ---------------------------------------------------------------------------
+
+class TestProbes:
+    def test_healthz_does_not_call_mc(self, client):
+        with patch("mc_commands.run_mc_command") as run:
+            res = client.get("/healthz")
+        assert res.status_code == 200
+        assert res.json() == {"status": "ok"}
+        run.assert_not_called()
+
+    def test_readyz_ok(self, client):
+        with patch("mc_commands.run_mc_command", return_value='{"status":"success","info":{}}') as run:
+            res = client.get("/readyz")
+        assert res.status_code == 200
+        run.assert_called_once_with(["admin", "info", "test"])
+
+    def test_readyz_minio_down(self, client):
+        with patch("mc_commands.run_mc_command", side_effect=McError("connection refused", 400)):
+            res = client.get("/readyz")
+        assert res.status_code == 503
+        assert res.json() == {"status": "unavailable", "detail": "connection refused"}
+
+    def test_readyz_error_with_exit_0(self, client):
+        # mc admin info meldet "connection refused" mit Exit 0 und status=error im JSON
+        output = '{"status":"error","error":"dial tcp 127.0.0.1:9: connect: connection refused","info":{}}'
+        with patch("mc_commands.run_mc_command", return_value=output):
+            res = client.get("/readyz")
+        assert res.status_code == 503
+        assert "connection refused" in res.json()["detail"]

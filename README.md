@@ -36,12 +36,39 @@ uv run uvicorn main:app --host 0.0.0.0 --port 9002
 
 ### get local mc client
 ```
-sh getclient.sh
+./getclient.sh
 ```
+Downloads `mc` for the current OS and architecture (linux/darwin, amd64/arm64) to `./mc` and verifies its SHA-256 checksum.
+Override the version with `MC_VERSION=RELEASE.… ./getclient.sh`.
+
+The MinIO client project is archived: `dl.min.io` answers `410 Gone`, so `mc` is taken from the
+[GitHub releases of minio/mc](https://github.com/minio/mc/releases). The last release is `RELEASE.2025-08-13T08-35-41Z`.
 
 ## Docker build
 ```
 docker build -t minioweb .
+# multi-arch
+docker buildx build --platform linux/amd64,linux/arm64 -t minioweb .
+```
+`mc` is pinned via `ARG MC_VERSION`, the per-architecture checksums are `ARG MC_SHA256_AMD64` / `ARG MC_SHA256_ARM64`.
+When changing the version, update all three (values from the `.sha256sum` files of the release) and `getclient.sh`.
+The image runs as non-root user `appuser`; app files and `mc` stay owned by root.
+
+## Health endpoints
+| Endpoint | Checks | Use |
+|---|---|---|
+| `GET /healthz` | process answers, no `mc` call | liveness probe, Docker `HEALTHCHECK` |
+| `GET /readyz` | `mc admin info` succeeds (MinIO reachable, admin credentials valid), else `503` | readiness probe |
+
+The app also refuses to start if MinIO is not reachable at startup.
+
+```yaml
+livenessProbe:
+  httpGet: { path: /healthz, port: 9002 }
+readinessProbe:
+  httpGet: { path: /readyz, port: 9002 }
+  periodSeconds: 30
+  timeoutSeconds: 20   # > MC_TIMEOUT
 ```
 
 ## set env vars

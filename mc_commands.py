@@ -214,13 +214,31 @@ def _split_policies(policy_name: str | None) -> list[str]:
     return [p.strip() for p in (policy_name or "").split(",") if p.strip()]
 
 
+def ping() -> None:
+    """`mc admin info`: wirft McError, wenn MinIO nicht erreichbar ist oder die Credentials nicht passen.
+
+    mc endet hier auch bei „connection refused“ mit Exit 0 und meldet den Fehler nur
+    im JSON (`"status": "error"`, `"error"` als String). Deshalb den Status prüfen.
+    """
+    output = run_mc_command(["admin", "info", _alias()])
+    try:
+        data = json.loads(output.split("\n")[0])
+    except json.JSONDecodeError:
+        raise McError(f"Unerwartete Antwort von mc admin info: {output[:200]!r}", 502) from None
+    if not isinstance(data, dict) or data.get("status") != "success":
+        error = data.get("error") if isinstance(data, dict) else None
+        if isinstance(error, dict):
+            error = error.get("message")
+        raise McError(str(error or "mc admin info meldet einen Fehler."), 502)
+
+
 def check_connection():
     """Prüft beim Start, ob mc ausführbar und MinIO mit den Admin-Credentials erreichbar ist."""
     cfg = settings()
     if not (os.path.isfile(cfg.mc_binary) and os.access(cfg.mc_binary, os.X_OK)):
         raise RuntimeError(f"mc nicht gefunden oder nicht ausführbar: {cfg.mc_binary!r} (MC_BINARY setzen)")
     try:
-        run_mc_command(["admin", "info", cfg.alias])
+        ping()
     except McError as e:
         raise RuntimeError(f"MinIO nicht erreichbar: {e}") from e
     logger.info("MinIO-Verbindung OK (%s → %s)", cfg.alias, cfg.endpoint)
