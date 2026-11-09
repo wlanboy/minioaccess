@@ -33,7 +33,6 @@ COPY --from=builder /app/mc /app/mc
 # Anwendungscode kopieren
 COPY main.py /app/
 COPY mc_commands.py /app/
-COPY templates/ /app/templates/
 COPY static/ /app/static/
 
 # Berechtigungen für appuser setzen
