@@ -8,8 +8,6 @@ anyio==4.16.0
     # via starlette
 click==8.5.1
     # via uvicorn
-dotenv==0.9.9
-    # via minioaccess
 fastapi==0.162.2
     # via minioaccess
 h11==0.16.0
@@ -23,7 +21,7 @@ pydantic==2.14.3
 pydantic-core==2.50.4
     # via pydantic
 python-dotenv==1.2.4
-    # via dotenv
+    # via minioaccess
 starlette==1.10.0
     # via fastapi
 typing-extensions==4.16.0

@@ -1,13 +1,13 @@
 import json
 import os
 import subprocess
+import sys
 from unittest.mock import patch
 
 import pytest
 
 import mc_commands
 from mc_commands import (
-    MC_BINARY,
     McError,
     check_connection,
     create_bucket,
@@ -19,10 +19,14 @@ from mc_commands import (
     get_policy_details,
     is_valid_bucket,
     list_buckets,
+    list_policy_details,
     list_users,
+    load_settings,
     policy_statements,
     run_mc_command,
 )
+
+MC = "/opt/mc-test"  # mc_binary aus tests/conftest.py
 
 REFUSED = McError("connection refused")
 
@@ -253,69 +257,87 @@ class TestGetPolicyDetails:
 
 
 # ---------------------------------------------------------------------------
-# get_bucket_policies
+# list_policy_details: parallel, Reihenfolge bleibt
 # ---------------------------------------------------------------------------
 
-def _user_info_json(username: str, policy_name: str) -> str:
-    return json.dumps({"status": "success", "accessKey": username, "policyName": policy_name, "userStatus": "enabled"})
+class TestListPolicyDetails:
+    def test_keeps_order(self):
+        names = [f"p{i}" for i in range(20)]
+        with patch("mc_commands.list_policies", return_value=names), \
+             patch("mc_commands.get_policy_details", side_effect=lambda n: {"name": n}):
+            assert [d["name"] for d in list_policy_details()] == names
+
+    def test_empty(self):
+        with patch("mc_commands.list_policies", return_value=[]), \
+             patch("mc_commands.get_policy_details") as details:
+            assert list_policy_details() == []
+        details.assert_not_called()
+
+    def test_error_is_raised(self):
+        with patch("mc_commands.list_policies", return_value=["a", "b"]), \
+             patch("mc_commands.get_policy_details", side_effect=REFUSED), pytest.raises(McError):
+            list_policy_details()
+
+
+# ---------------------------------------------------------------------------
+# get_bucket_policies: ein einziger `admin user list`
+# ---------------------------------------------------------------------------
+
+def _user_list_json(*users: tuple[str, str]) -> str:
+    return "\n".join(
+        json.dumps({"status": "success", "accessKey": name, "policyName": policies, "userStatus": "enabled"})
+        for name, policies in users
+    )
 
 
 class TestGetBucketPolicies:
-    def test_returns_matching_policies(self):
-        user_info = _user_info_json("alice", "mybucket-readonly")
-        with patch("mc_commands.list_users", return_value=[{"name": "alice", "enabled": True}]), \
-             patch("mc_commands.run_mc_command", return_value=user_info):
-            policies = get_bucket_policies("mybucket")
+    def _get(self, output: str, bucket: str = "mybucket"):
+        with patch("mc_commands.run_mc_command", return_value=output) as run:
+            result = get_bucket_policies(bucket)
+        return result, run
 
-        assert len(policies) == 1
-        assert policies[0] == {"user": "alice", "policy": "mybucket-readonly"}
+    def test_single_mc_call(self):
+        """Regression 3.2: kein `admin user info` pro User mehr."""
+        output = _user_list_json(*[(f"u{i}", "mybucket-readonly") for i in range(10)])
+        result, run = self._get(output)
+        assert len(result) == 10
+        run.assert_called_once_with(["admin", "user", "list", "test"])
+
+    def test_returns_matching_policies(self):
+        result, _ = self._get(_user_list_json(("alice", "mybucket-readonly")))
+        assert result == [{"user": "alice", "policy": "mybucket-readonly"}]
 
     def test_filters_policies_from_other_buckets(self):
-        user_info = _user_info_json("alice", "otherbucket-readonly")
-        with patch("mc_commands.list_users", return_value=[{"name": "alice", "enabled": True}]), \
-             patch("mc_commands.run_mc_command", return_value=user_info):
-            policies = get_bucket_policies("mybucket")
+        result, _ = self._get(_user_list_json(("alice", "otherbucket-readonly")))
+        assert result == []
 
-        assert policies == []
+    def test_bucket_with_common_prefix_not_mixed(self):
+        """Bucket "data" darf die Policies von "data-backup" nicht zeigen."""
+        result, _ = self._get(_user_list_json(("alice", "data-backup-readonly,data-readwrite")), bucket="data")
+        assert result == [{"user": "alice", "policy": "data-readwrite"}]
 
     def test_handles_multiple_policies_per_user(self):
-        user_info = _user_info_json("alice", "mybucket-readonly,mybucket-readwrite")
-        with patch("mc_commands.list_users", return_value=[{"name": "alice", "enabled": True}]), \
-             patch("mc_commands.run_mc_command", return_value=user_info):
-            policies = get_bucket_policies("mybucket")
-
-        assert len(policies) == 2
-        policy_names = {p["policy"] for p in policies}
-        assert policy_names == {"mybucket-readonly", "mybucket-readwrite"}
+        result, _ = self._get(_user_list_json(("alice", "mybucket-readonly, mybucket-readwrite")))
+        assert {p["policy"] for p in result} == {"mybucket-readonly", "mybucket-readwrite"}
 
     def test_handles_multiple_users(self):
-        def fake_user_info(command):
-            user = command[-1]
-            return _user_info_json(user, "mybucket-readonly")
+        result, _ = self._get(_user_list_json(("alice", "mybucket-readonly"), ("bob", "mybucket-writeonly")))
+        assert result == [
+            {"user": "alice", "policy": "mybucket-readonly"},
+            {"user": "bob", "policy": "mybucket-writeonly"},
+        ]
 
-        with patch("mc_commands.list_users", return_value=[{"name": "alice", "enabled": True}, {"name": "bob", "enabled": True}]), \
-             patch("mc_commands.run_mc_command", side_effect=fake_user_info):
-            policies = get_bucket_policies("mybucket")
-
-        assert len(policies) == 2
-        users = {p["user"] for p in policies}
-        assert users == {"alice", "bob"}
+    def test_user_without_policy(self):
+        output = json.dumps({"status": "success", "accessKey": "alice", "userStatus": "enabled"})
+        result, _ = self._get(output)
+        assert result == []
 
     def test_no_users_returns_empty(self):
-        with patch("mc_commands.list_users", return_value=[]):
-            policies = get_bucket_policies("mybucket")
-        assert policies == []
+        result, _ = self._get("")
+        assert result == []
 
-    def test_skips_users_with_mc_error(self):
-        with patch("mc_commands.list_users", return_value=[{"name": "ghost", "enabled": True}]), \
-             patch("mc_commands.run_mc_command", side_effect=McError("user not found")):
-            policies = get_bucket_policies("mybucket")
-
-        assert policies == []
-
-    def test_timeout_is_raised(self):
-        with patch("mc_commands.list_users", return_value=[{"name": "alice", "enabled": True}]), \
-             patch("mc_commands.run_mc_command", side_effect=McError("timeout", 504)), pytest.raises(McError):
+    def test_error_is_raised(self):
+        with patch("mc_commands.run_mc_command", side_effect=McError("timeout", 504)), pytest.raises(McError):
             get_bucket_policies("mybucket")
 
 
@@ -327,65 +349,68 @@ def _completed(returncode=0, stdout="", stderr=""):
     return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
 
 
-@pytest.fixture(autouse=False)
-def mc_config():
-    """Feste Werte, unabhängig von .env oder der Shell-Umgebung."""
-    with patch.multiple("mc_commands", MINIO_ALIAS="test", MINIO_ENDPOINT="http://localhost:9000",
-                        MINIO_ACCESS_KEY="testkey", MINIO_SECRET_KEY="testsecret"):
-        yield
-
-
-@pytest.mark.usefixtures("mc_config")
 class TestRunMcCommand:
+    def test_argv(self):
+        with patch("mc_commands.subprocess.run", return_value=_completed(stdout="ok")) as run:
+            assert run_mc_command(["ls", "test"]) == "ok"
+        assert run.call_args.args[0] == [MC, "--json", "ls", "test"]
+
     def test_credentials_in_env_not_argv(self):
         with patch("mc_commands.subprocess.run", return_value=_completed(stdout="ok")) as run:
-            run_mc_command([MC_BINARY, "--json", "ls", "test"])
+            run_mc_command(["ls", "test"])
         argv = run.call_args.args[0]
         env = run.call_args.kwargs["env"]
         assert "testsecret" not in " ".join(argv)
         assert env["MC_HOST_test"] == "http://testkey:testsecret@localhost:9000"
 
-    def test_special_chars_are_url_encoded(self):
-        with patch("mc_commands.MINIO_SECRET_KEY", "p@ss:w/rd%"), \
-             patch("mc_commands.subprocess.run", return_value=_completed()) as run:
-            run_mc_command([MC_BINARY, "ls", "test"])
+    def test_special_chars_are_url_encoded(self, use_settings):
+        use_settings(secret_key="p@ss:w/rd%")
+        with patch("mc_commands.subprocess.run", return_value=_completed()) as run:
+            run_mc_command(["ls", "test"])
         assert run.call_args.kwargs["env"]["MC_HOST_test"] == "http://testkey:p%40ss%3Aw%2Frd%25@localhost:9000"
 
-    def test_invalid_endpoint(self):
-        with patch("mc_commands.MINIO_ENDPOINT", "localhost:9000"), pytest.raises(RuntimeError):
-            run_mc_command([MC_BINARY, "ls", "test"])
+    def test_invalid_endpoint(self, use_settings):
+        with pytest.raises(RuntimeError, match="MINIO_ENDPOINT"):
+            use_settings(endpoint="localhost:9000")
+
+    def test_not_configured(self):
+        mc_commands.configure(None)
+        with patch("mc_commands.subprocess.run") as run, pytest.raises(RuntimeError, match="nicht konfiguriert"):
+            run_mc_command(["ls", "test"])
+        run.assert_not_called()
 
     def test_stdout_not_logged(self, caplog):
         caplog.set_level("DEBUG")
         with patch("mc_commands.subprocess.run", return_value=_completed(stdout='{"secretKey":"leak"}')):
-            run_mc_command([MC_BINARY, "--json", "admin", "user", "info", "test", "bob"])
+            run_mc_command(["admin", "user", "info", "test", "bob"])
         assert "leak" not in caplog.text
         assert "bob" not in caplog.text
+        assert "admin user info" in caplog.text
 
     def test_json_error_message(self):
         out = json.dumps({"status": "error", "error": {"message": "boom"}})
         with patch("mc_commands.subprocess.run", return_value=_completed(returncode=1, stdout=out)), \
              pytest.raises(McError) as exc:
-            run_mc_command([MC_BINARY, "ls", "test"])
+            run_mc_command(["ls", "test"])
         assert exc.value.message == "boom"
         assert exc.value.status == 400
 
     def test_text_error_message(self):
         with patch("mc_commands.subprocess.run", return_value=_completed(returncode=1, stderr="mc: <ERROR> nope")), \
              pytest.raises(McError) as exc:
-            run_mc_command([MC_BINARY, "ls", "test"])
+            run_mc_command(["ls", "test"])
         assert exc.value.message == "mc: <ERROR> nope"
 
     def test_error_text_in_stdout_with_exit_0_is_success(self):
         """Regression 2.2: Nur der Exit-Code entscheidet."""
         with patch("mc_commands.subprocess.run", return_value=_completed(stdout="Error-user")):
-            assert run_mc_command([MC_BINARY, "ls", "test"]) == "Error-user"
+            assert run_mc_command(["ls", "test"]) == "Error-user"
 
-    def test_timeout(self):
-        with patch("mc_commands.MC_TIMEOUT", 3.0), \
-             patch("mc_commands.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="mc", timeout=3)) as run, \
+    def test_timeout(self, use_settings):
+        use_settings(mc_timeout=3.0)
+        with patch("mc_commands.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="mc", timeout=3)) as run, \
              pytest.raises(McError) as exc:
-            run_mc_command([MC_BINARY, "ls", "test"])
+            run_mc_command(["ls", "test"])
         assert run.call_args.kwargs["timeout"] == 3.0
         assert exc.value.status == 504
         assert "Timeout" in exc.value.message
@@ -393,33 +418,32 @@ class TestRunMcCommand:
     def test_os_error(self):
         with patch("mc_commands.subprocess.run", side_effect=FileNotFoundError("./mc")), \
              pytest.raises(McError) as exc:
-            run_mc_command([MC_BINARY, "ls", "test"])
+            run_mc_command(["ls", "test"])
         assert exc.value.status == 500
 
 
 @pytest.fixture
-def fake_mc(tmp_path):
+def fake_mc(tmp_path, use_settings):
     path = tmp_path / "mc"
     path.write_text("#!/bin/sh\n")
     path.chmod(0o755)
-    with patch("mc_commands.MC_BINARY", str(path)):
-        yield str(path)
+    use_settings(mc_binary=str(path))
+    return str(path)
 
 
-@pytest.mark.usefixtures("mc_config")
 class TestCheckConnection:
     def test_uses_admin_info(self, fake_mc):
         with patch("mc_commands.run_mc_command", return_value="{}") as run:
             check_connection()
-        assert run.call_args.args[0] == [fake_mc, "--json", "admin", "info", "test"]
+        assert run.call_args.args[0] == ["admin", "info", "test"]
 
     def test_fails_when_minio_unreachable(self, fake_mc):
         with patch("mc_commands.run_mc_command", side_effect=REFUSED), pytest.raises(RuntimeError):
             check_connection()
 
-    def test_fails_when_binary_missing(self, tmp_path):
-        with patch("mc_commands.MC_BINARY", str(tmp_path / "missing")), \
-             patch("mc_commands.run_mc_command") as run, pytest.raises(RuntimeError, match="MC_BINARY"):
+    def test_fails_when_binary_missing(self, tmp_path, use_settings):
+        use_settings(mc_binary=str(tmp_path / "missing"))
+        with patch("mc_commands.run_mc_command") as run, pytest.raises(RuntimeError, match="MC_BINARY"):
             check_connection()
         run.assert_not_called()
 
@@ -430,20 +454,59 @@ class TestCheckConnection:
         run.assert_not_called()
 
 
-class TestResolveMcBinary:
-    def test_env_wins(self, monkeypatch):
-        monkeypatch.setenv("MC_BINARY", "/opt/mc")
-        assert mc_commands._resolve_mc_binary() == "/opt/mc"
+# ---------------------------------------------------------------------------
+# load_settings: erst im lifespan, nicht beim Import
+# ---------------------------------------------------------------------------
 
-    def test_path_fallback(self, monkeypatch):
-        monkeypatch.delenv("MC_BINARY", raising=False)
+@pytest.fixture
+def minio_env(monkeypatch):
+    monkeypatch.setattr("mc_commands.load_dotenv", lambda: None)
+    for key, value in {
+        "MINIO_ALIAS": "local", "MINIO_ENDPOINT": "https://minio:9000",
+        "MINIO_ACCESS_KEY": "admin", "MINIO_SECRET_KEY": "secret",
+    }.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv("MC_TIMEOUT", raising=False)
+    return monkeypatch
+
+
+class TestLoadSettings:
+    def test_reads_env(self, minio_env):
+        minio_env.setenv("MC_BINARY", "/opt/mc")
+        cfg = load_settings()
+        assert (cfg.alias, cfg.endpoint, cfg.access_key, cfg.secret_key) == (
+            "local", "https://minio:9000", "admin", "secret")
+        assert cfg.mc_binary == "/opt/mc"
+        assert cfg.mc_timeout == 15.0
+
+    def test_missing_variable(self, minio_env):
+        minio_env.delenv("MINIO_SECRET_KEY")
+        with pytest.raises(RuntimeError, match="MINIO_SECRET_KEY"):
+            load_settings()
+
+    def test_timeout_from_env(self, minio_env):
+        minio_env.setenv("MC_TIMEOUT", "2.5")
+        assert load_settings().mc_timeout == 2.5
+
+    def test_path_fallback(self, minio_env):
+        minio_env.delenv("MC_BINARY", raising=False)
         with patch("mc_commands.shutil.which", return_value="/usr/bin/mc"):
-            assert mc_commands._resolve_mc_binary() == "/usr/bin/mc"
+            assert load_settings().mc_binary == "/usr/bin/mc"
 
-    def test_local_fallback(self, monkeypatch):
-        monkeypatch.delenv("MC_BINARY", raising=False)
+    def test_local_fallback(self, minio_env):
+        minio_env.delenv("MC_BINARY", raising=False)
         with patch("mc_commands.shutil.which", return_value=None):
-            assert mc_commands._resolve_mc_binary() == "./mc"
+            assert load_settings().mc_binary == "./mc"
+
+    def test_import_needs_no_env(self):
+        """Regression 3.5: mc_commands lässt sich ohne MINIO_* importieren."""
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("MINIO_", "MC_"))}
+        result = subprocess.run(
+            [sys.executable, "-c", "import mc_commands, main"],
+            env=env, cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            capture_output=True, text=True, check=False,
+        )
+        assert result.returncode == 0, result.stderr
 
 
 # ---------------------------------------------------------------------------
@@ -476,14 +539,12 @@ class TestValidation:
 
 
 class TestDeleteBucket:
-    @pytest.mark.usefixtures("mc_config")
     def test_without_force(self):
         with patch("mc_commands.run_mc_command", return_value="") as run:
             delete_bucket("data")
-        assert run.call_args.args[0] == [MC_BINARY, "--json", "rb", "test/data"]
+        assert run.call_args.args[0] == ["rb", "test/data"]
 
-    @pytest.mark.usefixtures("mc_config")
     def test_with_force(self):
         with patch("mc_commands.run_mc_command", return_value="") as run:
             delete_bucket("data", force=True)
-        assert run.call_args.args[0] == [MC_BINARY, "--json", "rb", "--force", "test/data"]
+        assert run.call_args.args[0] == ["rb", "--force", "test/data"]

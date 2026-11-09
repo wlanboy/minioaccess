@@ -8,12 +8,12 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import mc_commands
 from mc_commands import (
     POLICY_TYPES,
     McError,
     attach_policy,
     change_password,
-    check_connection,
     create_bucket,
     create_user,
     delete_bucket,
@@ -24,13 +24,12 @@ from mc_commands import (
     enable_user,
     ensure_bucket_policy,
     get_bucket_policies,
-    get_policy_details,
     is_valid_access_key,
     is_valid_bucket,
     is_valid_policy_name,
     is_valid_secret,
     list_buckets,
-    list_policies,
+    list_policy_details,
     list_users,
 )
 
@@ -41,7 +40,8 @@ MIN_SECRET_LENGTH = 12
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    check_connection()
+    mc_commands.configure(mc_commands.load_settings())
+    mc_commands.check_connection()
     yield
 
 
@@ -273,7 +273,7 @@ def bucket_policy_detach(name: str, policy: str, user: str):
 
 @app.get("/api/policies")
 def policies_list():
-    return [get_policy_details(name) for name in list_policies()]
+    return list_policy_details()
 
 
 @app.delete("/api/policies/{name}")
