@@ -1,7 +1,8 @@
-import os
 import json
+import os
 import subprocess
 import tempfile
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -24,7 +25,7 @@ MINIO_SECRET_KEY = _require_env("MINIO_SECRET_KEY")
 
 def run_mc_command(command: list[str]) -> str:
     try:
-        result = subprocess.run(command, capture_output=True, text=True)
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
         print(f"MC Command: {result.stdout}")
         if result.returncode != 0:
             error_output = result.stdout.strip() or result.stderr.strip()
@@ -35,7 +36,7 @@ def run_mc_command(command: list[str]) -> str:
             except (json.JSONDecodeError, AttributeError):
                 return f"Error: {error_output}"
         return result.stdout.strip()
-    except Exception as e:
+    except (OSError, subprocess.SubprocessError) as e:
         return f"Error: {e}"
 
 

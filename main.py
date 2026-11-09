@@ -1,29 +1,30 @@
 import os
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, Form
+
+from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from mc_commands import (
-    setup_mc_alias,
-    list_users,
+    attach_policy,
+    change_password,
+    create_bucket,
+    create_user,
+    delete_bucket,
+    delete_policy,
+    delete_user,
+    detach_policy,
+    disable_user,
+    enable_user,
+    ensure_bucket_policy,
+    get_bucket_policies,
+    get_policy_details,
     list_buckets,
     list_policies,
-    get_policy_details,
-    delete_policy,
-    get_bucket_policies,
-    ensure_bucket_policy,
-    create_user,
-    delete_user,
-    change_password,
-    enable_user,
-    disable_user,
-    create_bucket,
-    delete_bucket,
-    attach_policy,
-    detach_policy,
+    list_users,
+    setup_mc_alias,
 )
 
 

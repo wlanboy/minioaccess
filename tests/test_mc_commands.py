@@ -2,13 +2,12 @@ import json
 from unittest.mock import patch
 
 from mc_commands import (
-    get_policy_actions,
-    list_users,
-    list_buckets,
     create_bucket_policy,
     get_bucket_policies,
+    get_policy_actions,
+    list_buckets,
+    list_users,
 )
-
 
 # ---------------------------------------------------------------------------
 # get_policy_actions
